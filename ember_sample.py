@@ -2,16 +2,26 @@ import requests
 import time
 import hmac
 import hashlib
+import csv
+import pandas as pd
 
 # --- API Configuration ---
 BASE_URL = "https://mock-api.roostoo.com"
-API_KEY = "YOUR_API_KEY_HERE"      # Replace with your actual API key
-SECRET_KEY = "YOUR_SECRET_KEY_HERE"  # Replace with your actual secret key
-
+# General Portfolio Testing API
+API_KEY = "VEl4HZ01sGMbCyr48He5r7CGhTIgaoUj4IeEHpFdb77qyJIOb3YlsdQm681AJs6A"      # Replace with your actual API key
+SECRET_KEY = "7ue4oQRfdkGu4bhRXBmkbjA5iO7fTY4Zdaz6l0XGT6mXvNiYQqpiz4mWPVriU4Wo"  # Replace with your actual secret key
+# R1 Competition API
+# API_KEY = "KPmLBKLYVEmPgRsiyYkN33UY5KlLPv1Qi7ykUJAvqEB5Fj888IiALZncN1YlwmO4"
+# SECRET_KEY = "h7rT1aw2MiHgCgOt2Hu0crUZy1kSG6oho4UMMcgRUveMvIQ3H3B7ivla16krAegj"
 
 # ------------------------------
 # Utility Functions
 # ------------------------------
+
+def append_to_csv(file_path, row_data):
+    with open(file_path, mode='a', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(row_data)
 
 def _get_timestamp():
     """Return a 13-digit millisecond timestamp as string."""
@@ -196,6 +206,73 @@ def cancel_order(order_id=None, pair=None):
         print(f"Response text: {e.response.text if e.response else 'N/A'}")
         return None
 
+def tickers_to_csv(ticker_list):
+    # TODO Change this to run asynchronously 
+    time_now = _get_timestamp()
+    for ticker in ticker_list:
+        tdata = get_ticker(ticker)
+
+        if tdata and tdata["Success"] == True:
+            info = tdata.get("Data", {}).get(ticker, {})
+        else:
+            print(f"Failed to get data for {ticker}")
+            continue
+
+        file_name = ticker.replace("/", "_")
+        path = f"./{file_name}.csv"
+        try:
+            with open(path, 'r') as f:
+                pass
+        except FileNotFoundError:
+            headers = ["Timestamp"]
+            headers += list(info.keys())
+            append_to_csv(path, headers)
+        upload_info = [time_now] 
+        upload_info += list(info.values())
+        append_to_csv(path, upload_info)
+
+def check_for_trades():
+    # TODO Iterate through CSV
+    # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
+    # For now, do market order if spread is < 0.001
+    # Else, we do limit orders
+    # Submit post request if we take a trade
+    # place_order("BNB/USD", "BUY", 1)
+    # Add the orders to an orders.csv
+    update_orders()
+    pass
+
+def update_orders(): # TODO Parameters WIP 
+    # TODO New orders to be added to order file 
+    # query_order to check if any current orders are still pending
+    # cancel_order to remove if the targets have changed
+    # if query_order shows it is completed, completed orders to be deleted from order file and added to portfolio
+    order_file = "./orders.csv"
+    try:
+        with open(order_file, 'r') as f:
+            pass
+    except FileNotFoundError:
+        headers = [] # Headers TBD
+        append_to_csv(order_file, headers)
+    
+    if query_order() == "":
+        # If this is true, we add/remove to portfolio
+        pass
+    else:
+        # If this is false, we want to check if the target is still valid. If not we will cancel
+        pass
+
+def update_portfolio(): # TODO Parameters WIP
+    # TODO To add/remove successful orders into portfolio
+    # Close entire position for simplicity, can advance this next time
+    # If a successful order is removed, we want to update our PnL / balance (this might have a function)
+    portfolio_file = "./portfolio.csv"
+    try:
+        with open(portfolio_file, 'r') as f:
+            pass
+    except FileNotFoundError:
+        headers = [] # Headers TBD
+        append_to_csv(portfolio_file, headers)
 
 # ------------------------------
 # Quick Demo Section
@@ -214,16 +291,24 @@ if __name__ == "__main__":
     if ticker:
         print(ticker.get("Data", {}).get("BTC/USD", {}))
 
-    print("\n--- Getting Account Balance ---")
-    print(get_balance())
+    while True:
+        tickers_to_csv(list(info.get('TradePairs', {}).keys()))
+        check_for_trades()
 
-    print("\n--- Checking Pending Orders ---")
-    print(get_pending_count())
+        time.sleep(1)
 
-    # Uncomment these to test trading actions:
-    # print(place_order("BTC", "BUY", 0.01, price=95000))  # LIMIT
-    print(place_order("BNB/USD", "BUY", 1))      
-    print(place_order("BNB/USD", "SELL", 1))             # MARKET       
-    print(query_order(pair="BNB/USD", pending_only=False))
+
+
+    # print("\n--- Getting Account Balance ---")
+    # print(get_balance())
+
+    # print("\n--- Checking Pending Orders ---")
+    # print(get_pending_count())
+
+    # # Uncomment these to test trading actions:
+    # # print(place_order("BTC", "BUY", 0.01, price=95000))  # LIMIT
+    # print(place_order("BNB/USD", "BUY", 1))      
+    # print(place_order("BNB/USD", "SELL", 1))             # MARKET       
+    # print(query_order(pair="BNB/USD", pending_only=False))
     # print(cancel_order(pair="BNB/USD"))
 
