@@ -241,9 +241,9 @@ def calculate_double_EMA(df, time_period, column):
     DEMA = 2*EMA - EMA.ewm(span=time_period, adjust=False).mean()
     return DEMA
 
-def create_double_EMA_columns(df, short_time_period, long_time_period, column):
-    df["Short period DEMA"] = calculate_double_EMA(df, short_time_period, column)
-    df["Long period DEMA"] = calculate_double_EMA(df, long_time_period, column)
+def create_double_EMA_columns(df, column, short_time_period=20, long_time_period=50):
+    df["DEMA_Short"] = calculate_double_EMA(df, short_time_period, column)
+    df["DEMA_Long"] = calculate_double_EMA(df, long_time_period, column)
     return None
 
 def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
@@ -258,18 +258,22 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     # NOTE Compare only final row assuming CSV maintained at 2*long_period-1 rows
     # For buying, we check:
     # 1. We are currently NOT in the long position  : df["indicator"][1] == False
-    # 2. The short and long DEMA cross each other   : df["Short period DEMA"][-1] > df["Long period DEMA"][-1]
+    # 2. The short and long DEMA cross each other   : df["DEMA_Short"][-1] > df["DEMA_Long"][-1]
     if df["indicator"][1] == False \
-        and df["Short period DEMA"][-1] > df["Long period DEMA"][-1] \
+        and df["DEMA_Short"][-1] > df["DEMA_Long"][-1] \
         and curr_cash > buy_expenditure:
 
         # For now, do market order if spread is < 0.001
         if spread < 0.001:
-            # BUY at market order
+            # BUY at market order, followed by immediately updating portfolio
             place_order(pair_or_coin, "BUY", quantity_buy)
+            update_orders(pair_or_coin, "BUY", quantity_buy)
+            update_portfolio(pair_or_coin, "BUY", current_position, "MARKET", price, PnL) # TODO Use API to get current price and compute PnL
+            df["indicator"][1] = True
         else:
             # BUY at limit order
             place_order(pair_or_coin, "BUY", quantity_buy, price=mid_spread)
+            # Query order to see if we can place a buy
         
         # Change indicator to True, indicating a position is now buy
         df["indicator"][1] = True
@@ -277,32 +281,34 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     # NOTE Compare only final row assuming CSV maintained at 2*long_period-1 rows
     # For selling, we check:
     # 1. We are currently in the long position                              :   df["indicator"][1] == True
-    # 2. The short and long DEMA cross each other                           :   df["Short period DEMA"][-1] < df["Long period DEMA"][-1]
+    # 2. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 3. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
     elif df["indicator"][1] == True \
-        and df["Short period DEMA"][-1] < df["Long period DEMA"][-1] \
+        and df["DEMA_Short"][-1] < df["DEMA_Long"][-1] \
         and current_position > 0:
 
         # For now, do market order if spread is < 0.001
         if spread < 0.001:
             # SELL at market order. SELL will close entire position for simplicity
             place_order(pair_or_coin, "SELL", current_position)
+            update_orders(pair_or_coin, "SELL", quantity_buy)
+            update_portfolio(pair_or_coin, "SELL", current_position, "MARKET", price, PnL) # TODO Use API to get current price and compute PnL
+            df["indicator"][1] = False
 
         else:
             # SELL at limit order
             place_order(pair_or_coin, "SELL", current_position, price=mid_spread)
+            # Query order to see if we can place a buy
         
         # Change indicator to True, indicating a position is now buy
-        df["indicator"][1] = False
+        
 
     else:
         # Continue to hold
         # Append position as NaN in our portfolio CSV since no BUY/SELL action taken
     
     # Submit post request if we take a trade
-    # place_order("BNB/USD", "BUY", 1)
     # Add the orders to an orders.csv
-    update_orders()
     pass
 
 def update_orders(): # TODO Parameters WIP 
@@ -325,17 +331,41 @@ def update_orders(): # TODO Parameters WIP
         # If this is false, we want to check if the target is still valid. If not we will cancel
         pass
 
-def update_portfolio(): # TODO Parameters WIP
-    # TODO To add/remove successful orders into portfolio
+def update_portfolio(pair_or_coin, side, quantity, transaction_type, price, PnL): # TODO Parameters WIP
+    # TODO To add/remove successful orders into portfolios
     # Close entire position for simplicity, can advance this next time
     # If a successful order is removed, we want to update our PnL / balance (this might have a function)
     portfolio_file = "./portfolio.csv"
+
+    if transaction_type == "MARKET":
+        commission = ((0.1)/100) * price * quantity
+    elif transaction_type == "LIMIT":
+        commission = ((0.05)/100) * price * quantity
+
     try:
         with open(portfolio_file, 'r') as f:
-            pass
+            # Check if the file is empty
+            first_line = f.readline()
+            if not first_line.strip():
+                # File is empty, write headers
+                headers = ["Ticker_name", "Timestamp", "Transaction_type", "Price", "Quantity", "Side", "PnL", "Commission"]
+                append_to_csv(portfolio_file, headers)
+
+                # After headers are written, append the actual data row
+                timestamp = _get_timestamp()
+                data_row = [pair_or_coin, timestamp, transaction_type, price, quantity, side, PnL, commission]
+                append_to_csv(portfolio_file, data_row)
+            else:
+                # File is not empty and has headers, append a new row
+                timestamp = _get_timestamp()
+                data_row = [pair_or_coin, timestamp, transaction_type, price, quantity, side, PnL, commission]
+                append_to_csv(portfolio_file, data_row)
     except FileNotFoundError:
-        headers = [] # Headers TBD
+        headers = ["Ticker_name", "Timestamp", "Transaction_type", "Price", "Quantity", "Side", "PnL", "Commission"]
         append_to_csv(portfolio_file, headers)
+        timestamp = _get_timestamp()
+        data_row = [pair_or_coin, timestamp, transaction_type, price, quantity, side, PnL, commission]
+        append_to_csv(portfolio_file, data_row)
 
 # ------------------------------
 # Quick Demo Section
