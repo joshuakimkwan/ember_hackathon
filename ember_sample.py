@@ -5,6 +5,10 @@ import hashlib
 import csv
 import pandas as pd
 
+import numpy as np
+import matplotlib.pyplot as plt
+
+
 # --- API Configuration ---
 BASE_URL = "https://mock-api.roostoo.com"
 # General Portfolio Testing API
@@ -231,11 +235,70 @@ def tickers_to_csv(ticker_list):
         upload_info += list(info.values())
         append_to_csv(path, upload_info)
 
-def check_for_trades():
-    # TODO Iterate through CSV
+def calculate_double_EMA(df, time_period, column):
+    # df refers to the csv being opened at that point in time, which will be accessed via pandas df
+    EMA = df[column].ewm(span=time_period, adjust=False).mean()
+    DEMA = 2*EMA - EMA.ewm(span=time_period, adjust=False).mean()
+    return DEMA
+
+def create_double_EMA_columns(df, short_time_period, long_time_period, column):
+    df["Short period DEMA"] = calculate_double_EMA(df, short_time_period, column)
+    df["Long period DEMA"] = calculate_double_EMA(df, long_time_period, column)
+    return None
+
+def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
+    # TODO Iterate through CSV. (Added: CSV should be maintained at (2*long_time_period-1) rows)
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
-    # For now, do market order if spread is < 0.001
-    # Else, we do limit orders
+    spread = df["MaxBid"] - df["MinAsk"]
+    mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
+    quantity_buy = buy_expenditure / mid_spread
+    current_position = portfolio.loc[portfolio["Ticker"] == pair_or_coin, "Curr_qty_holding"].values
+    # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
+
+    # NOTE Compare only final row assuming CSV maintained at 2*long_period-1 rows
+    # For buying, we check:
+    # 1. We are currently NOT in the long position  : df["indicator"][1] == False
+    # 2. The short and long DEMA cross each other   : df["Short period DEMA"][-1] > df["Long period DEMA"][-1]
+    if df["indicator"][1] == False \
+        and df["Short period DEMA"][-1] > df["Long period DEMA"][-1] \
+        and curr_cash > buy_expenditure:
+
+        # For now, do market order if spread is < 0.001
+        if spread < 0.001:
+            # BUY at market order
+            place_order(pair_or_coin, "BUY", quantity_buy)
+        else:
+            # BUY at limit order
+            place_order(pair_or_coin, "BUY", quantity_buy, price=mid_spread)
+        
+        # Change indicator to True, indicating a position is now buy
+        df["indicator"][1] = True
+
+    # NOTE Compare only final row assuming CSV maintained at 2*long_period-1 rows
+    # For selling, we check:
+    # 1. We are currently in the long position                              :   df["indicator"][1] == True
+    # 2. The short and long DEMA cross each other                           :   df["Short period DEMA"][-1] < df["Long period DEMA"][-1]
+    # 3. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
+    elif df["indicator"][1] == True \
+        and df["Short period DEMA"][-1] < df["Long period DEMA"][-1] \
+        and current_position > 0:
+
+        # For now, do market order if spread is < 0.001
+        if spread < 0.001:
+            # SELL at market order. SELL will close entire position for simplicity
+            place_order(pair_or_coin, "SELL", current_position)
+
+        else:
+            # SELL at limit order
+            place_order(pair_or_coin, "SELL", current_position, price=mid_spread)
+        
+        # Change indicator to True, indicating a position is now buy
+        df["indicator"][1] = False
+
+    else:
+        # Continue to hold
+        # Append position as NaN in our portfolio CSV since no BUY/SELL action taken
+    
     # Submit post request if we take a trade
     # place_order("BNB/USD", "BUY", 1)
     # Add the orders to an orders.csv
