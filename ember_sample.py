@@ -252,7 +252,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     spread = df["MaxBid"] - df["MinAsk"]
     mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
     quantity_buy = buy_expenditure / mid_spread
-    current_position = portfolio.loc[portfolio["Ticker"] == pair_or_coin, "Curr_qty_holding"].values
+    current_position = portfolio.loc[portfolio["Ticker_name"] == pair_or_coin, "Quantity"].values
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
 
     # NOTE Compare only final row assuming CSV maintained at 2*long_period-1 rows
@@ -266,9 +266,13 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
         # For now, do market order if spread is < 0.001
         if spread < 0.001:
             # BUY at market order, followed by immediately updating portfolio
-            place_order(pair_or_coin, "BUY", quantity_buy)
+            order = place_order(pair_or_coin, "BUY", current_position)
+            order_id = order["OrderDetail"]["OrderID"]
+            quantity_buy = order["OrderDetail"]["Quantity"]
+            price = order["OrderDetail"]["Price"]
+            PnL = 0 # Since this is buy, nothing profitted yet
             update_orders(pair_or_coin, "BUY", quantity_buy)
-            update_portfolio(pair_or_coin, "BUY", current_position, "MARKET", price, PnL) # TODO Use API to get current price and compute PnL
+            update_portfolio(order_id, pair_or_coin, "BUY", quantity_buy, "MARKET", price, PnL) # TODO Use API to get current price and compute PnL
             df["indicator"][1] = True
         else:
             # BUY at limit order
@@ -286,13 +290,17 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     elif df["indicator"][1] == True \
         and df["DEMA_Short"][-1] < df["DEMA_Long"][-1] \
         and current_position > 0:
-
+        price_bought = portfolio.loc[portfolio["Ticker_name"] == pair_or_coin, "Price"].values
         # For now, do market order if spread is < 0.001
         if spread < 0.001:
             # SELL at market order. SELL will close entire position for simplicity
-            place_order(pair_or_coin, "SELL", current_position)
+            order = place_order(pair_or_coin, "SELL", current_position)
+            order_id = order["OrderDetail"]["OrderID"]
+            quantity_buy = order["OrderDetail"]["Quantity"]
+            price = order["OrderDetail"]["Price"]
+            PnL = price_bought - price
             update_orders(pair_or_coin, "SELL", quantity_buy)
-            update_portfolio(pair_or_coin, "SELL", current_position, "MARKET", price, PnL) # TODO Use API to get current price and compute PnL
+            update_portfolio(order_id, pair_or_coin, "SELL", quantity_buy, "MARKET", price, PnL) # TODO Use API to get current price and compute PnL
             df["indicator"][1] = False
 
         else:
@@ -302,14 +310,13 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
         
         # Change indicator to True, indicating a position is now buy
         
-
     else:
         # Continue to hold
         # Append position as NaN in our portfolio CSV since no BUY/SELL action taken
-    
+        pass
     # Submit post request if we take a trade
     # Add the orders to an orders.csv
-    pass
+    
 
 def update_orders(): # TODO Parameters WIP 
     # TODO New orders to be added to order file 
@@ -331,7 +338,25 @@ def update_orders(): # TODO Parameters WIP
         # If this is false, we want to check if the target is still valid. If not we will cancel
         pass
 
-def update_portfolio(pair_or_coin, side, quantity, transaction_type, price, PnL): # TODO Parameters WIP
+def portfolio_file():
+    portfolio_file = "./portfolio.csv"
+    try:
+        with open(portfolio_file, 'r') as f:
+            # Check if the file is empty
+            first_line = f.readline()
+            if not first_line.strip():
+                # File is empty, write headers
+                headers = ["Timestamp", "OrderID", "Ticker_name", "Transaction_type", "Price", "Quantity", "Side", "PnL", "Commission"]
+                append_to_csv(portfolio_file, headers)
+            else:
+                pass
+    except FileNotFoundError:
+        headers = ["Timestamp", "OrderID", "Ticker_name", "Transaction_type", "Price", "Quantity", "Side", "PnL", "Commission"]
+        append_to_csv(portfolio_file, headers)
+    portfolio_df = pd.read_csv(portfolio_file)
+    return portfolio_df
+
+def update_portfolio(order_id, pair_or_coin, side, quantity, transaction_type, price, PnL): # TODO Parameters WIP
     # TODO To add/remove successful orders into portfolios
     # Close entire position for simplicity, can advance this next time
     # If a successful order is removed, we want to update our PnL / balance (this might have a function)
@@ -348,23 +373,23 @@ def update_portfolio(pair_or_coin, side, quantity, transaction_type, price, PnL)
             first_line = f.readline()
             if not first_line.strip():
                 # File is empty, write headers
-                headers = ["Ticker_name", "Timestamp", "Transaction_type", "Price", "Quantity", "Side", "PnL", "Commission"]
+                headers = ["Timestamp", "OrderID", "Ticker_name", "Transaction_type", "Price", "Quantity", "Side", "PnL", "Commission"]
                 append_to_csv(portfolio_file, headers)
 
                 # After headers are written, append the actual data row
                 timestamp = _get_timestamp()
-                data_row = [pair_or_coin, timestamp, transaction_type, price, quantity, side, PnL, commission]
+                data_row = [timestamp, order_id, pair_or_coin, transaction_type, price, quantity, side, PnL, commission]
                 append_to_csv(portfolio_file, data_row)
             else:
                 # File is not empty and has headers, append a new row
                 timestamp = _get_timestamp()
-                data_row = [pair_or_coin, timestamp, transaction_type, price, quantity, side, PnL, commission]
+                data_row = [timestamp, order_id, pair_or_coin, transaction_type, price, quantity, side, PnL, commission]
                 append_to_csv(portfolio_file, data_row)
     except FileNotFoundError:
-        headers = ["Ticker_name", "Timestamp", "Transaction_type", "Price", "Quantity", "Side", "PnL", "Commission"]
+        headers = ["Timestamp", "OrderID", "Ticker_name", "Transaction_type", "Price", "Quantity", "Side", "PnL", "Commission"]
         append_to_csv(portfolio_file, headers)
         timestamp = _get_timestamp()
-        data_row = [pair_or_coin, timestamp, transaction_type, price, quantity, side, PnL, commission]
+        data_row = [timestamp, order_id, pair_or_coin, transaction_type, price, quantity, side, PnL, commission]
         append_to_csv(portfolio_file, data_row)
 
 # ------------------------------
@@ -385,11 +410,64 @@ if __name__ == "__main__":
         print(ticker.get("Data", {}).get("BTC/USD", {}))
 
     while True:
-        tickers_to_csv(list(info.get('TradePairs', {}).keys()))
-        check_for_trades()
+        """
+        For each ticker, do (while True:)
+        1. Open CSV of the ticker
+        2. Populate CSV with data (see function tickers_to_csv or see the csv that has been populated)
+        3. Compute the DEMA for that CSV while it is still open
+            a. Also, ensure there are exactly 2*long_period - 1 rows in the CSV 
+            b. In particular, add the latest data, followed by removing the earliest row, then compute the DEMA columns
+        4. Run the function check_for_trades to see if we can make a trade. 
+            a. If no trade is made, then move on to the next ticker
+            b. If market order is made, we update the portfolio with the trade details immediately
+            c. If limit order is made,
+                i. Check if we have any queued orders, possibly using the order_id
+                ii. If there is queued orders, cancel that queue order and update with this new queue order. This is done with update_orders?
+                iii. Will the exchange execute the queued order without our functions? If so how will we know if a queued order has been executed?
+        """
+        # 1. Open CSV of the ticker
+        for ticker in list(info.get('TradePairs', {}).keys()):
+            tdata = get_ticker(ticker)
+            if tdata and tdata["Success"] == True:
+                info = tdata.get("Data", {}).get(ticker, {})
+            else:
+                print(f"Failed to get data for {ticker}")
+                continue
 
-        time.sleep(1)
+            file_name = ticker.replace("/", "_")
+            path = f"./{file_name}.csv"
+            try:
+                with open(path, 'r') as f:
+                    pass
+            except FileNotFoundError:
+                headers = ["Timestamp"]
+                headers += list(info.keys())
+                append_to_csv(path, headers)
 
+            # 2. Populate CSV with data (see function tickers_to_csv or see the csv that has been populated)
+            upload_info = [_get_timestamp()]
+            upload_info += list(info.values())
+            append_to_csv(path, upload_info)
+
+            # 3. Compute the DEMA for that CSV while it is still open
+            # Convert csv to pandas dataframe for computation of DEMA
+            # Remove earliest row if length exceeds 2*long_period - 1
+            df = pd.read_csv(path)
+            df["DEMA_Short"] = calculate_double_EMA(df, 20, "LastPrice")
+            df["DEMA_Long"] = calculate_double_EMA(df, 50, "LastPrice")
+            while len(df) > 2*50 - 1:
+                df = df.iloc[1:]
+            df.to_csv(path, index=False) # Update the csv
+
+            # 4. Run the function check_for_trades to see if we can make a trade. 
+
+
+    # while True:
+    #     tickers_to_csv(list(info.get('TradePairs', {}).keys()))
+    #     print(list(info.get('TradePairs', {}).keys())[0])
+    #     check_for_trades()
+
+    #     time.sleep(1)
 
 
     # print("\n--- Getting Account Balance ---")
