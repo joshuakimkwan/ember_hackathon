@@ -340,7 +340,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                     limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                     # 挂单
                     order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
-
+                    add_pending_orders(order, "./pending_orders.csv")
                     # Need below??
                     # order_id = order["OrderDetail"]["OrderID"]
                     # df["indicator"][1] = True
@@ -381,7 +381,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                     # 挂单
                     order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
                     order_id = order["OrderDetail"]["OrderID"]
-                    add_pfo_orders(order, "./pending_orders.csv")
+                    add_pending_orders(order, "./pending_orders.csv")
     else:
         # Continue to hold
         # Append position as NaN in our portfolio CSV since no BUY/SELL action taken
