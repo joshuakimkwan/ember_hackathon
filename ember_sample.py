@@ -299,6 +299,8 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
         pending_orders = []
     else:
         pending_orders = [order for order in current_orders["OrderMatched"] if order["Status"] == "PENDING"]
+    # pending_orders should contain only 2 entries. For each ticker, [0] entry is BUY, [1] entry is sell.
+    # This means that we would not have more than 1 limit order for BUY for any point in time. Similar for SELL.
 
     ma20 = df["MA"].iloc[-1]
     atr = df["ATR"].iloc[-1]
@@ -338,10 +340,12 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                     limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                     # 挂单
                     order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
-                    order_id = order["OrderDetail"]["OrderID"]
-                    df["indicator"][1] = True
-                    PnL = 0 # Since this is buy, nothing profitted yet
-                    update_portfolio(order_id, pair_or_coin, "BUY", quantity_buy_limit, "LIMIT", limit_price, PnL) # TODO Use API to get current price and compute PnL
+                    add_pending_orders(order, "./pending_orders.csv")
+                    # Need below??
+                    # order_id = order["OrderDetail"]["OrderID"]
+                    # df["indicator"][1] = True
+                    # PnL = 0 # Since this is buy, nothing profitted yet
+                    # update_portfolio(order_id, pair_or_coin, "BUY", quantity_buy_limit, "LIMIT", limit_price, PnL) # TODO Use API to get current price and compute PnL
             # Query order to see if we can place a buy
         
         # Change indicator to True, indicating a position is now buy
@@ -369,12 +373,15 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
             df["indicator"][1] = False
 
         else:
-            # SELL at limit order
-            place_order(pair_or_coin, "SELL", current_position, price=mid_spread)
-            # Query order to see if we can place a buy
-        
-        # Change indicator to True, indicating a position is now buy
-        
+            # SELL at limit order. When we limit sell, we close the entire trade.
+            if not pending_orders or abs(pending_orders[1]['Price'] - (ma20 + 0.5*atr)) / mid_spread > 0.05:
+                limit_price = ma20 + 0.5 * atr
+                if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
+                    limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
+                    # 挂单
+                    order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
+                    order_id = order["OrderDetail"]["OrderID"]
+                    add_pending_orders(order, "./pending_orders.csv")
     else:
         # Continue to hold
         # Append position as NaN in our portfolio CSV since no BUY/SELL action taken
@@ -396,8 +403,6 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                 cancel_order(order_id=order['OrderID'])
                 print(f"Cancelled pending {order['Side']} order {order['OrderID']} due to deviation/time")
         pass
-    # Submit post request if we take a trade
-    # Add the orders to an orders.csv
     
 
 def update_orders(): # TODO Parameters WIP 
