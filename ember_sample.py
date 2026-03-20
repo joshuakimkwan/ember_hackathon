@@ -357,9 +357,9 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
             order = place_order(pair_or_coin, "SELL", current_position)
             quantity_buy = order["OrderDetail"]["Quantity"]
             price = order["OrderDetail"]["Price"]
-            PnL = (price_bought - price) * current_position * (1 - float(order["CommissionPercent"]))
+            PnL = (price_bought - price) * current_position * (1 - float(order["OrderDetail"]["CommissionPercent"]))
             add_pfo_orders(order["OrderDetail"], "./portfolio.csv")
-            add_to_pnl(order, price_bought, PnL, "./pnl.csv")
+            add_to_pnl(order["OrderDetail"], price_bought, PnL, "./pnl.csv")
         else:
             if pending_orders:
                 for order in pending_orders:
@@ -429,8 +429,10 @@ def create_headers():
         append_to_csv("./pnl.csv", pnl_headers)
 
 def add_to_pnl(order, init_price, PnL, csv_file = "./pnl.csv"):
-    append_to_csv(f"{order["Pair"]}, {order["Quantity"]}, {init_price}, {order["Price"]}, {order["FinishTimestamp"]}, {PnL}", csv_file)
-
+    df = pd.read_csv(csv_file)
+    new_row_value = [order["Pair"], order["Quantity"], init_price, order["Price"], order["FinishTimestamp"], PnL]
+    df.loc[len(df)] = new_row_value
+    df.to_csv(csv_file, index = False)
 
 def add_pfo_orders(order, csv_file = "./portfolio.csv"): 
     df = pd.read_csv(csv_file)
@@ -450,23 +452,24 @@ def add_pfo_orders(order, csv_file = "./portfolio.csv"):
             order_side = 1 if order["Side"] == "BUY" else -1
 
             new_quantity = df.loc[df["Pair"] == order["Pair"], "Quantity"].iloc[0] * pfo_side + order["Quantity"] * order_side
-            new_price = ( df.loc[df["Pair"] == order["Pair"], "Price"] * df.loc[df["Pair"] == order["Pair"], "Quantity"] * pfo_side + \
-                        order["Quantity"] * order["Price"] * order_side ) / \
-                        new_quantity
             if new_quantity == 0:
                 logging.info(f"Empty quantity found for {order["Pair"]}, removing pair from portfolio")
                 drop_index = df[df["Pair"] == order["Pair"]].index
                 df.drop(drop_index, inplace = True)
-            elif new_quantity < 0:
-                logging.info(f"New price {new_price} and quantity {new_quantity} found for {order["Pair"]}")
-                df.loc[df["Pair"] == order["Pair"], "Side"] = "SELL"
-                df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
-                df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity * -1
-            else:
-                logging.info(f"New price {new_price} and quantity {new_quantity} found for {order["Pair"]}")
-                df.loc[df["Pair"] == order["Pair"], "Side"] = "BUY"
-                df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
-                df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity
+            else: 
+                new_price = ( df.loc[df["Pair"] == order["Pair"], "Price"].iloc[0] * df.loc[df["Pair"] == order["Pair"], "Quantity"].iloc[0] * pfo_side + \
+                        order["Quantity"] * order["Price"] * order_side ) / \
+                        new_quantity      
+                if new_quantity < 0:
+                    logging.info(f"New price {new_price} and quantity {new_quantity} found for {order["Pair"]}")
+                    df.loc[df["Pair"] == order["Pair"], "Side"] = "SELL"
+                    df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
+                    df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity * -1
+                else:
+                    logging.info(f"New price {new_price} and quantity {new_quantity} found for {order["Pair"]}")
+                    df.loc[df["Pair"] == order["Pair"], "Side"] = "BUY"
+                    df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
+                    df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity
         df.to_csv(csv_file, index = False)
 
 def add_pending_orders(order, csv_file = "./pending_orders.csv", drop = False):
@@ -495,7 +498,10 @@ def check_portfolio(orders):
 async def poll_for_trades(ticker_list):
     portfolio = pd.read_csv("./portfolio.csv")
     for ticker in ticker_list:
-        df = pd.read_csv(f"{ticker.replace("/","_")}.csv")
+        path = f"{ticker.replace("/","_")}.csv"
+        if os.path.getsize(path) == 0:
+            continue
+        df = pd.read_csv(path)
         curr_cash = get_balance()["SpotWallet"]["USD"]["Free"]
         threshold = 0.02
         buy_expenditure = min(curr_cash * threshold, 500)
@@ -550,6 +556,9 @@ if __name__ == "__main__":
     logging.info("--- Validate all trades ---")
     check_portfolio(all_orders)
 
+    logging.info("--- Checking Current Balance")
+    logging.info(get_balance())
+
     logging.info("--- Checking Server Time ---")
     logging.info(check_server_time())
 
@@ -558,8 +567,8 @@ if __name__ == "__main__":
     # if info:
     #     print(f"Available Pairs: {list(info.get('TradePairs', {}).keys())}")
     
-    logging.info("--- Running query_order ---")
-    # logging.info(query_order())
+    # logging.info("--- Running query_order ---")
+    # logging.info(query_order(None, "ZEN/USD"))
 
     # print("\n--- Getting Market Ticker (BTC/USD) ---")
     # ticker = get_ticker("BTC/USD")
