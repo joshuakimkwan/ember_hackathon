@@ -4,10 +4,14 @@ import hmac
 import hashlib
 import csv
 import pandas as pd
-
+import os 
+import asyncio
 import numpy as np
 import matplotlib.pyplot as plt
+import logging
 
+# Configure the root logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- API Configuration ---
 BASE_URL = "https://mock-api.roostoo.com"
@@ -19,13 +23,16 @@ SECRET_KEY = "7ue4oQRfdkGu4bhRXBmkbjA5iO7fTY4Zdaz6l0XGT6mXvNiYQqpiz4mWPVriU4Wo" 
 # SECRET_KEY = "h7rT1aw2MiHgCgOt2Hu0crUZy1kSG6oho4UMMcgRUveMvIQ3H3B7ivla16krAegj"
 
 # ------------------------------
-# Utility Functions
+# Helpers 
 # ------------------------------
-
 def append_to_csv(file_path, row_data):
     with open(file_path, mode='a', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(row_data)
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
 
 def _get_timestamp():
     """Return a 13-digit millisecond timestamp as string."""
@@ -210,7 +217,10 @@ def cancel_order(order_id=None, pair=None):
         print(f"Response text: {e.response.text if e.response else 'N/A'}")
         return None
 
-def tickers_to_csv(ticker_list):
+# ------------------------------
+# Own Functions
+# ------------------------------
+async def tickers_to_csv(ticker_list):
     # TODO Change this to run asynchronously 
     time_now = _get_timestamp()
     for ticker in ticker_list:
@@ -219,7 +229,9 @@ def tickers_to_csv(ticker_list):
         if tdata and tdata["Success"] == True:
             info = tdata.get("Data", {}).get(ticker, {})
         else:
-            print(f"Failed to get data for {ticker}")
+            logging.info(f"Failed to get data for {ticker}")
+            with open(f"{ticker.replace("/", "_")}.csv", "w") as f:
+                pass
             continue
 
         file_name = ticker.replace("/", "_")
@@ -235,6 +247,8 @@ def tickers_to_csv(ticker_list):
         upload_info += list(info.values())
         append_to_csv(path, upload_info)
 
+### Metrics Computation
+
 def calculate_double_EMA(df, time_period, column):
     # df refers to the csv being opened at that point in time, which will be accessed via pandas df
     EMA = df[column].ewm(span=time_period, adjust=False).mean()
@@ -246,13 +260,54 @@ def create_double_EMA_columns(df, column, short_time_period=20, long_time_period
     df["DEMA_Long"] = calculate_double_EMA(df, long_time_period, column)
     return None
 
+def calculate_MA(df, time_period, column):
+    MA = df[column].rolling(window=time_period, min_periods=1).mean()
+    return MA
+
+def calculate_ATR(df, time_period, column):
+    ATR = df[column].diff().abs().rolling(window=time_period).mean()
+    return ATR
+
+async def compute_metrics(ticker_list, short=20, long=50):
+    # Compute the DEMA 
+    # Convert csv to pandas dataframe for computation of DEMA
+    # Remove earliest row if length exceeds 2*long_period - 1
+    for ticker in ticker_list: 
+        path = f"./{ticker.replace("/", "_")}" + ".csv"
+        if os.path.getsize(path) == 0:
+            continue
+        df = pd.read_csv(path)
+        
+        df["DEMA_Short"] = calculate_double_EMA(df, short, "LastPrice")
+        df["DEMA_Long"] = calculate_double_EMA(df, long, "LastPrice")
+        df["MA"] = calculate_MA(df, short, "LastPrice")
+        df["ATR"] = calculate_ATR(df, short, "LastPrice")
+        while len(df) > 2*long - 1:
+            df = df.iloc[1:]
+        df.to_csv(path, index=False) # Update the csv
+
 def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     # TODO Iterate through CSV. (Added: CSV should be maintained at (2*long_time_period-1) rows)
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
     spread = df["MaxBid"] - df["MinAsk"]
     mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
     quantity_buy = buy_expenditure / mid_spread
+
+    ### COMBINING SCTIONS
+    current_orders = query_order(None, pair_or_coin)
+    if current_orders['Success'] == False:
+        pending_orders = []
+    else:
+        pending_orders = [order for order in current_orders["OrderMatched"] if order["Status"] == "PENDING"]
+
+    ma20 = df["MA"].iloc[-1]
+    atr = df["ATR"].iloc[-1]
+    quantity_buy_limit = quantity_buy * 0.7  # 70% for limit order
+    quantity_buy_market = quantity_buy * 0.3  # 30% for market order
+
     current_position = portfolio.loc[portfolio["Ticker_name"] == pair_or_coin, "Quantity"].values
+
+
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
 
     # NOTE Compare only final row assuming CSV maintained at 2*long_period-1 rows
@@ -276,7 +331,17 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
             df["indicator"][1] = True
         else:
             # BUY at limit order
-            place_order(pair_or_coin, "BUY", quantity_buy, price=mid_spread)
+            # 如果没有挂单或者现有挂单价格偏离过大，可以挂新的
+            if not pending_orders or abs(pending_orders[0]['Price'] - (ma20 - 0.5*atr)) / mid_spread > 0.05:
+                limit_price = ma20 - 0.5 * atr
+                if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
+                    limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
+                    # 挂单
+                    order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
+                    order_id = order["OrderDetail"]["OrderID"]
+                    df["indicator"][1] = True
+                    PnL = 0 # Since this is buy, nothing profitted yet
+                    update_portfolio(order_id, pair_or_coin, "BUY", quantity_buy_limit, "LIMIT", limit_price, PnL) # TODO Use API to get current price and compute PnL
             # Query order to see if we can place a buy
         
         # Change indicator to True, indicating a position is now buy
@@ -313,6 +378,23 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     else:
         # Continue to hold
         # Append position as NaN in our portfolio CSV since no BUY/SELL action taken
+        current_time = int(time.time() * 1000)  # 当前时间，单位毫秒
+        max_pending_duration = 60 * 60 * 1000  # 最大挂单时间 1 小时（可调）
+
+        for order in pending_orders:
+            order_age = current_time - order["CreateTimestamp"]
+            # 计算目标价格（滚动支撑/阻力）
+            if order['Side'] == "BUY":
+                target_price = ma20 - 0.5 * atr
+            elif order['Side'] == "SELL":
+                target_price = ma20 + 0.5 * atr
+            else:
+                continue
+            # 判断是否需要撤单：价格偏离过大 或 存在时间过长
+            price_deviation = abs(order['Price'] - mid_spread) / mid_spread
+            if price_deviation > 0.05 or order_age > max_pending_duration:
+                cancel_order(order_id=order['OrderID'])
+                print(f"Cancelled pending {order['Side']} order {order['OrderID']} due to deviation/time")
         pass
     # Submit post request if we take a trade
     # Add the orders to an orders.csv
@@ -392,83 +474,117 @@ def update_portfolio(order_id, pair_or_coin, side, quantity, transaction_type, p
         data_row = [timestamp, order_id, pair_or_coin, transaction_type, price, quantity, side, PnL, commission]
         append_to_csv(portfolio_file, data_row)
 
+def remove_pending_orders(orders):
+    for order in orders["OrderMatched"]:
+        order_id = order["OrderID"]
+        pair = order["Pair"]
+        status = order["Status"]
+        if status == "PENDING":
+            cancel_order(order_id, pair)
+
+
+def create_headers():
+    headers = ["Pair", "OrderID", "Status", "CreateTimestamp", "FinishTimestamp", "Side", "Type", "Price", "Quantity"]
+    files = ["./pending_orders.csv", "./portfolio.csv"]
+    for csv_file in files:
+        try:
+            with open(csv_file, 'r') as f:
+                pass
+        except FileNotFoundError:
+            append_to_csv(csv_file, headers)
+
+def add_pfo_orders(order, csv_file): 
+    df = pd.read_csv(csv_file)
+    headers = df.columns
+    odata = []
+    for head in headers:
+        odata.append(order[head])
+    logging.info(f"Concat {csv_file} with {odata}")
+    if not df[df["OrderID"] == int(order["OrderID"])].empty:
+        logging.info(f"Order {order["OrderID"]} has been already added to {csv_file}")
+    else:
+        filtered = df.loc[df["Pair"] == order["Pair"]]
+        for row in filtered.itertuples(index = False):
+            row[5] = "Test"
+        #df.loc[len(df)] = odata
+        #df.to_csv(csv_file, index = False)
+
+def add_pending_orders(order, csv_file):
+    pass    
+
+def check_portfolio(orders):
+    for order in orders["OrderMatched"]:
+        status = order["Status"]
+        if status == "PENDING":
+            # Add to orders.csv
+            add_pending_orders(order, "./pending_orders.csv")
+            pass
+        elif status == "FILLED":
+            # Add to portfolio.csv
+            add_pfo_orders(order, "./portfolio.csv")
+            pass
+        else:
+            continue
+        break
+
+
+async def main():
+    """
+    For each ticker, do (while True:)
+    1. Open CSV of the ticker + Calculate DEMA 
+    2. Populate CSV with data (see function tickers_to_csv or see the csv that has been populated)
+    3. Compute the DEMA for that CSV while it is still open
+        a. Also, ensure there are exactly 2*long_period - 1 rows in the CSV 
+        b. In particular, add the latest data, followed by removing the earliest row, then compute the DEMA columns
+     """
+    print(f"Started at {time.strftime('%X')}")
+    info = get_exchange_info()
+    ticker_list = list(info.get('TradePairs', {}).keys())
+    await asyncio.gather(
+        tickers_to_csv(ticker_list),     # Always keep getting exchange data
+        compute_metrics(ticker_list)#,       # Always recompute DEMA        
+        #check_for_trades()               # Check for trades
+    )
+    print(f"Finished at {time.strftime('%X')}")
+
+
 # ------------------------------
 # Quick Demo Section
 # ------------------------------
 if __name__ == "__main__":
-    print("\n--- Checking Server Time ---")
-    print(check_server_time())
+    all_orders = query_order()
 
-    print("\n--- Getting Exchange Info ---")
+    logging.info("--- Creating necessary files if they don't exist ---")
+    create_headers()
+
+    logging.info("--- Remove all pending trades ---")
+    remove_pending_orders(all_orders)
+
+    logging.info("--- Validate all trades ---")
+    check_portfolio(all_orders)
+
+    logging.info("--- Checking Server Time ---")
+    logging.info(check_server_time())
+
+    logging.info("--- Getting Exchange Info ---")
     info = get_exchange_info()
-    if info:
-        print(f"Available Pairs: {list(info.get('TradePairs', {}).keys())}")
+    # if info:
+    #     print(f"Available Pairs: {list(info.get('TradePairs', {}).keys())}")
+    
+    logging.info("--- Running query_order ---")
+    # logging.info(query_order())
 
-    print("\n--- Getting Market Ticker (BTC/USD) ---")
-    ticker = get_ticker("BTC/USD")
-    if ticker:
-        print(ticker.get("Data", {}).get("BTC/USD", {}))
+    # print("\n--- Getting Market Ticker (BTC/USD) ---")
+    # ticker = get_ticker("BTC/USD")
+    # if ticker:
+    #     print(ticker.get("Data", {}).get("BTC/USD", {}))
 
-    while True:
-        """
-        For each ticker, do (while True:)
-        1. Open CSV of the ticker
-        2. Populate CSV with data (see function tickers_to_csv or see the csv that has been populated)
-        3. Compute the DEMA for that CSV while it is still open
-            a. Also, ensure there are exactly 2*long_period - 1 rows in the CSV 
-            b. In particular, add the latest data, followed by removing the earliest row, then compute the DEMA columns
-        4. Run the function check_for_trades to see if we can make a trade. 
-            a. If no trade is made, then move on to the next ticker
-            b. If market order is made, we update the portfolio with the trade details immediately
-            c. If limit order is made,
-                i. Check if we have any queued orders, possibly using the order_id
-                ii. If there is queued orders, cancel that queue order and update with this new queue order. This is done with update_orders?
-                iii. Will the exchange execute the queued order without our functions? If so how will we know if a queued order has been executed?
-        """
-        # 1. Open CSV of the ticker
-        for ticker in list(info.get('TradePairs', {}).keys()):
-            tdata = get_ticker(ticker)
-            if tdata and tdata["Success"] == True:
-                info = tdata.get("Data", {}).get(ticker, {})
-            else:
-                print(f"Failed to get data for {ticker}")
-                continue
-
-            file_name = ticker.replace("/", "_")
-            path = f"./{file_name}.csv"
-            try:
-                with open(path, 'r') as f:
-                    pass
-            except FileNotFoundError:
-                headers = ["Timestamp"]
-                headers += list(info.keys())
-                append_to_csv(path, headers)
-
-            # 2. Populate CSV with data (see function tickers_to_csv or see the csv that has been populated)
-            upload_info = [_get_timestamp()]
-            upload_info += list(info.values())
-            append_to_csv(path, upload_info)
-
-            # 3. Compute the DEMA for that CSV while it is still open
-            # Convert csv to pandas dataframe for computation of DEMA
-            # Remove earliest row if length exceeds 2*long_period - 1
-            df = pd.read_csv(path)
-            df["DEMA_Short"] = calculate_double_EMA(df, 20, "LastPrice")
-            df["DEMA_Long"] = calculate_double_EMA(df, 50, "LastPrice")
-            while len(df) > 2*50 - 1:
-                df = df.iloc[1:]
-            df.to_csv(path, index=False) # Update the csv
-
-            # 4. Run the function check_for_trades to see if we can make a trade. 
-
-
+    #print("\n--- Triggering place_order ---")
+    #print(place_order("ADA/USD", "SELL", "3.5", "0.34", "LIMIT"))
+    #print("\n--- Triggering query_order ---")
+    #print([order["Status"] for order in query_order(None, "ADA/USD")["OrderMatched"]])
     # while True:
-    #     tickers_to_csv(list(info.get('TradePairs', {}).keys()))
-    #     print(list(info.get('TradePairs', {}).keys())[0])
-    #     check_for_trades()
-
-    #     time.sleep(1)
-
+    #     asyncio.run(main())
 
     # print("\n--- Getting Account Balance ---")
     # print(get_balance())
