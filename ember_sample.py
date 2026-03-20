@@ -488,6 +488,10 @@ def create_headers():
     files = ["./pending_orders.csv", "./portfolio.csv"]
     for csv_file in files:
         try:
+            os.remove(csv_file)
+        except FileNotFoundError:
+            logging.error(f"{csv_file} not found. Continuing...")
+        try:
             with open(csv_file, 'r') as f:
                 pass
         except FileNotFoundError:
@@ -499,15 +503,36 @@ def add_pfo_orders(order, csv_file):
     odata = []
     for head in headers:
         odata.append(order[head])
-    logging.info(f"Concat {csv_file} with {odata}")
     if not df[df["OrderID"] == int(order["OrderID"])].empty:
         logging.info(f"Order {order["OrderID"]} has been already added to {csv_file}")
     else:
-        filtered = df.loc[df["Pair"] == order["Pair"]]
-        for row in filtered.itertuples(index = False):
-            row[5] = "Test"
-        #df.loc[len(df)] = odata
-        #df.to_csv(csv_file, index = False)
+        side = df.loc[df["Pair"] == order["Pair"], "Side"]
+        if side.empty:
+            logging.info(f"Added {odata} into {csv_file}")
+            df.loc[len(df)] = odata
+        else:
+            pfo_side = 1 if side.iloc[0] == "BUY" else -1
+            order_side = 1 if order["Side"] == "BUY" else -1
+
+            new_quantity = df.loc[df["Pair"] == order["Pair"], "Quantity"].iloc[0] * pfo_side + order["Quantity"] * order_side
+            new_price = ( df.loc[df["Pair"] == order["Pair"], "Price"] * df.loc[df["Pair"] == order["Pair"], "Quantity"] * pfo_side + \
+                        order["Quantity"] * order["Price"] * order_side ) / \
+                        new_quantity
+            if new_quantity == 0:
+                logging.info(f"Empty quantity found for {order["Pair"]}, removing pair from portfolio")
+                drop_index = df[df["Pair"] == order["Pair"]].index
+                df.drop(drop_index, inplace = True)
+            elif new_quantity < 0:
+                logging.info(f"New price {new_price} and quantity {new_quantity} found for {order["Pair"]}")
+                df.loc[df["Pair"] == order["Pair"], "Side"] = "SELL"
+                df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
+                df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity * -1
+            else:
+                logging.info(f"New price {new_price} and quantity {new_quantity} found for {order["Pair"]}")
+                df.loc[df["Pair"] == order["Pair"], "Side"] = "BUY"
+                df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
+                df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity
+        df.to_csv(csv_file, index = False)
 
 def add_pending_orders(order, csv_file):
     pass    
@@ -525,7 +550,7 @@ def check_portfolio(orders):
             pass
         else:
             continue
-        break
+        
 
 
 async def main():
