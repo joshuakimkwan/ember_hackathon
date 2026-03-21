@@ -454,6 +454,8 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
         #         print(f"Cancelled pending {order['Side']} order {order['OrderID']} due to deviation/time")
 
 def remove_pending_orders(orders):
+    if orders["Success"] == False:
+        return
     for order in orders["OrderMatched"]:
         order_id = order["OrderID"]
         pair = order["Pair"]
@@ -546,6 +548,8 @@ def add_pending_orders(order, csv_file = "./pending_orders.csv", drop = False):
 
 
 def check_portfolio(orders):
+    if orders["Success"] == False:
+        return
     for order in orders["OrderMatched"]:
         status = order["Status"]
         if status == "FILLED":
