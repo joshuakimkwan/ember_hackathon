@@ -22,6 +22,7 @@ SECRET_KEY = "7ue4oQRfdkGu4bhRXBmkbjA5iO7fTY4Zdaz6l0XGT6mXvNiYQqpiz4mWPVriU4Wo" 
 # API_KEY = "KPmLBKLYVEmPgRsiyYkN33UY5KlLPv1Qi7ykUJAvqEB5Fj888IiALZncN1YlwmO4"
 # SECRET_KEY = "h7rT1aw2MiHgCgOt2Hu0crUZy1kSG6oho4UMMcgRUveMvIQ3H3B7ivla16krAegj"
 info = None
+balance = None
 
 # ------------------------------
 # Helpers 
@@ -221,32 +222,66 @@ def cancel_order(order_id=None, pair=None):
 # ------------------------------
 # Own Functions
 # ------------------------------
-async def tickers_to_csv(ticker_list):
-    # TODO Change this to run asynchronously 
+async def process_ticker(ticker):
     time_now = _get_timestamp()
-    for ticker in ticker_list:
-        tdata = get_ticker(ticker)
 
-        if tdata and tdata["Success"] == True:
+    try:
+        # 把同步函数变成异步执行（线程池）
+        tdata = await asyncio.to_thread(get_ticker, ticker)
+
+        if tdata and tdata.get("Success") is True:
             info = tdata.get("Data", {}).get(ticker, {})
         else:
             logging.info(f"Failed to get data for {ticker}")
-            with open(f"{ticker.replace('/', '_')}.csv", "w") as f:
-                pass
-            continue
-
+            open(f"{ticker.replace('/', '_')}.csv", "w").close()
+            return
         file_name = ticker.replace("/", "_")
         path = f"./{file_name}.csv"
-        try:
-            with open(path, 'r') as f:
-                pass
-        except FileNotFoundError:
-            headers = ["Timestamp"]
-            headers += list(info.keys())
+        # 如果文件不存在 → 写header
+        if not os.path.exists(path):
+            headers = ["Timestamp"] + list(info.keys())
             append_to_csv(path, headers)
-        upload_info = [time_now] 
-        upload_info += list(info.values())
+
+        # 写数据
+        upload_info = [time_now] + list(info.values())
         append_to_csv(path, upload_info)
+
+    except Exception as e:
+        logging.error(f"Error processing {ticker}: {e}")
+
+
+# 主函数（并发执行）
+async def tickers_to_csv(ticker_list):
+    tasks = [process_ticker(ticker) for ticker in ticker_list]
+    # 并发执行
+    await asyncio.gather(*tasks)
+
+# async def tickers_to_csv(ticker_list):
+#     # TODO Change this to run asynchronously 
+#     time_now = _get_timestamp()
+#     for ticker in ticker_list:
+#         tdata = get_ticker(ticker)
+
+#         if tdata and tdata["Success"] == True:
+#             info = tdata.get("Data", {}).get(ticker, {})
+#         else:
+#             logging.info(f"Failed to get data for {ticker}")
+#             with open(f"{ticker.replace('/', '_')}.csv", "w") as f:
+#                 pass
+#             continue
+
+#         file_name = ticker.replace("/", "_")
+#         path = f"./{file_name}.csv"
+#         try:
+#             with open(path, 'r') as f:
+#                 pass
+#         except FileNotFoundError:
+#             headers = ["Timestamp"]
+#             headers += list(info.keys())
+#             append_to_csv(path, headers)
+#         upload_info = [time_now] 
+#         upload_info += list(info.values())
+#         append_to_csv(path, upload_info)
 
 ### Metrics Computation
 
@@ -328,27 +363,30 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
             logging.info(f"Order info: {order}")
             quantity_buy = order["OrderDetail"]["Quantity"]
             price = order["OrderDetail"]["Price"]
+            balance = get_balance()
             add_pfo_orders(order["OrderDetail"], "./portfolio.csv")
         else:
             # BUY at limit order
             # 如果没有挂单或者现有挂单价格偏离过大，可以挂新的
             if pending_orders:
                 for order in pending_orders:
-                    if abs(pending_orders[0]['Price'] - (ma20 - 0.5*atr)) / mid_spread > 0.05:
+                    if abs(pending_orders[0]['Price'] - (ma20 - 1.5*atr)) / mid_spread > 0.05:
                         logging.info(f"Cancelling order for {pair_or_coin}")
                         cancel_order(order["OrderID"], pair_or_coin)
-                        limit_price = ma20 - 0.5 * atr
+                        limit_price = ma20 - 1.5 * atr
                         if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
                             limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                             # 挂单
                             order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
+                            balance = get_balance()
                             add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
             else:
-                limit_price = ma20 - 0.5 * atr
+                limit_price = ma20 - 1.5 * atr
                 if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
                     limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                     # 挂单
                     order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
+                    balance = get_balance()
                     add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
@@ -361,24 +399,27 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
             # SELL at market order. SELL will close entire position for simplicity
             logging.info(f"Sending SELL Order for {pair_or_coin} with quantity {current_position}")
             order = place_order(pair_or_coin, "SELL", current_position)
+            logging.info(f"Order info: {order}")
             quantity_buy = order["OrderDetail"]["Quantity"]
             price = order["OrderDetail"]["Price"]
             PnL = (price_bought - price) * current_position * (1 - float(order["OrderDetail"]["CommissionPercent"]))
+            balance = get_balance()
             add_pfo_orders(order["OrderDetail"], "./portfolio.csv")
             add_to_pnl(order["OrderDetail"], price_bought, PnL, "./pnl.csv")
         else:
             if pending_orders:
                 for order in pending_orders:
-                    if abs(pending_orders[0]['Price'] - (ma20 + 0.5*atr)) / mid_spread > 0.05:
+                    if abs(pending_orders[0]['Price'] - (ma20 + 1.5*atr)) / mid_spread > 0.05:
                         cancel_order(order["OrderID"], pair_or_coin)
-                        limit_price = ma20 + 0.5 * atr
+                        limit_price = ma20 + 1.5 * atr
                         if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
                             limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                             # 挂单
                             order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
+                            balance = get_balance()
                             add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
             # else:
-            #     limit_price = ma20 + 0.5 * atr
+            #     limit_price = ma20 + 1.5 * atr
             #     if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
             #         limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
             #         # 挂单
@@ -478,12 +519,12 @@ def add_pfo_orders(order, csv_file = "./portfolio.csv"):
                     logging.info(f"New price {new_price} and quantity {new_quantity} found for {order['Pair']}")
                     df.loc[df["Pair"] == order["Pair"], "Side"] = "SELL"
                     df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
-                    df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity * -1
+                    df.loc[df["Pair"] == order["Pair"], "Quantity"] = balance['SpotWallet'][order['Pair'].replace('/USD','')]['Free']
                 else:
                     logging.info(f"New price {new_price} and quantity {new_quantity} found for {order['Pair']}")
                     df.loc[df["Pair"] == order["Pair"], "Side"] = "BUY"
                     df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
-                    df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity
+                    df.loc[df["Pair"] == order["Pair"], "Quantity"] = balance['SpotWallet'][order['Pair'].replace('/USD','')]['Free']
         df.to_csv(csv_file, index = False)
 
 def add_pending_orders(order, csv_file = "./pending_orders.csv", drop = False):
@@ -560,6 +601,10 @@ async def main():
 # ------------------------------
 if __name__ == "__main__":
     all_orders = query_order()
+    
+    logging.info("--- Checking Current Balance")
+    balance = get_balance()
+    logging.info(balance)
 
     logging.info("--- Creating necessary files if they don't exist ---")
     create_headers()
@@ -570,8 +615,6 @@ if __name__ == "__main__":
     logging.info("--- Validate all trades ---")
     check_portfolio(all_orders)
 
-    logging.info("--- Checking Current Balance")
-    logging.info(get_balance())
 
     logging.info("--- Checking Server Time ---")
     logging.info(check_server_time())
@@ -583,7 +626,7 @@ if __name__ == "__main__":
     #     print(f"Available Pairs: {list(info.get('TradePairs', {}).keys())}")
     
     # logging.info("--- Running query_order ---")
-    # logging.info(query_order(None, "ZEN/USD"))
+    logging.info(query_order(None, "CRV/USD"))
 
     # print("\n--- Getting Market Ticker (BTC/USD) ---")
     # ticker = get_ticker("BTC/USD")
