@@ -230,7 +230,7 @@ async def tickers_to_csv(ticker_list):
             info = tdata.get("Data", {}).get(ticker, {})
         else:
             logging.info(f"Failed to get data for {ticker}")
-            with open(f"{ticker.replace("/", "_")}.csv", "w") as f:
+            with open(f"{ticker.replace('/', '_')}.csv", "w") as f:
                 pass
             continue
 
@@ -273,7 +273,7 @@ async def compute_metrics(ticker_list, short=20, long=50):
     # Convert csv to pandas dataframe for computation of DEMA
     # Remove earliest row if length exceeds 2*long_period - 1
     for ticker in ticker_list: 
-        path = f"./{ticker.replace("/", "_")}" + ".csv"
+        path = f"./{ticker.replace('/', '_')}" + ".csv"
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
@@ -344,6 +344,13 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                             # 挂单
                             order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
                             add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+            else:
+                limit_price = ma20 - 0.5 * atr
+                if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
+                    limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
+                    # 挂单
+                    order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
+                    add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
@@ -371,6 +378,14 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                             # 挂单
                             order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
                             add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+            # else:
+            #     limit_price = ma20 + 0.5 * atr
+            #     if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
+            #         limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
+            #         # 挂单
+            #         order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
+            #         add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+
 
     else:
         pass
@@ -441,7 +456,7 @@ def add_pfo_orders(order, csv_file = "./portfolio.csv"):
     for head in headers:
         odata.append(order[head])
     if not df[df["OrderID"] == int(order["OrderID"])].empty:
-        logging.info(f"Order {order["OrderID"]} has been already added to {csv_file}")
+        logging.info(f"Order {order['OrderID']} has been already added to {csv_file}")
     else:
         side = df.loc[df["Pair"] == order["Pair"], "Side"]
         if side.empty:
@@ -453,7 +468,7 @@ def add_pfo_orders(order, csv_file = "./portfolio.csv"):
 
             new_quantity = df.loc[df["Pair"] == order["Pair"], "Quantity"].iloc[0] * pfo_side + order["Quantity"] * order_side
             if new_quantity == 0:
-                logging.info(f"Empty quantity found for {order["Pair"]}, removing pair from portfolio")
+                logging.info(f"Empty quantity found for {order['Pair']}, removing pair from portfolio")
                 drop_index = df[df["Pair"] == order["Pair"]].index
                 df.drop(drop_index, inplace = True)
             else: 
@@ -461,12 +476,12 @@ def add_pfo_orders(order, csv_file = "./portfolio.csv"):
                         order["Quantity"] * order["Price"] * order_side ) / \
                         new_quantity      
                 if new_quantity < 0:
-                    logging.info(f"New price {new_price} and quantity {new_quantity} found for {order["Pair"]}")
+                    logging.info(f"New price {new_price} and quantity {new_quantity} found for {order['Pair']}")
                     df.loc[df["Pair"] == order["Pair"], "Side"] = "SELL"
                     df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
                     df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity * -1
                 else:
-                    logging.info(f"New price {new_price} and quantity {new_quantity} found for {order["Pair"]}")
+                    logging.info(f"New price {new_price} and quantity {new_quantity} found for {order['Pair']}")
                     df.loc[df["Pair"] == order["Pair"], "Side"] = "BUY"
                     df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
                     df.loc[df["Pair"] == order["Pair"], "Quantity"] = new_quantity
@@ -498,7 +513,7 @@ def check_portfolio(orders):
 async def poll_for_trades(ticker_list):
     portfolio = pd.read_csv("./portfolio.csv")
     for ticker in ticker_list:
-        path = f"{ticker.replace("/","_")}.csv"
+        path = f"{ticker.replace('/','_')}.csv"
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
