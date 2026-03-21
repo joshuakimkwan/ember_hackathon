@@ -21,6 +21,7 @@ SECRET_KEY = "7ue4oQRfdkGu4bhRXBmkbjA5iO7fTY4Zdaz6l0XGT6mXvNiYQqpiz4mWPVriU4Wo" 
 # R1 Competition API
 # API_KEY = "KPmLBKLYVEmPgRsiyYkN33UY5KlLPv1Qi7ykUJAvqEB5Fj888IiALZncN1YlwmO4"
 # SECRET_KEY = "h7rT1aw2MiHgCgOt2Hu0crUZy1kSG6oho4UMMcgRUveMvIQ3H3B7ivla16krAegj"
+info = None
 
 # ------------------------------
 # Helpers 
@@ -286,8 +287,6 @@ async def compute_metrics(ticker_list, short=20, long=50):
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
 
-
-
 def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     # TODO Iterate through CSV. (Added: CSV should be maintained at (2*long_time_period-1) rows)
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
@@ -306,7 +305,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
 
     ma20 = df["MA"].iloc[-1]
     atr = df["ATR"].iloc[-1]
-    quantity_buy_limit = int(quantity_buy * 0.7)  # 70% for limit order
+    quantity_buy_limit = round(quantity_buy * 0.7, info['TradePairs'][pair_or_coin]['AmountPrecision'])  # 70% for limit order
     quantity_buy_market = quantity_buy * 0.3  # 30% for market order
 
     curr_position = portfolio[portfolio["Pair"] == pair_or_coin]
@@ -579,6 +578,7 @@ if __name__ == "__main__":
 
     logging.info("--- Getting Exchange Info ---")
     info = get_exchange_info()
+
     # if info:
     #     print(f"Available Pairs: {list(info.get('TradePairs', {}).keys())}")
     
