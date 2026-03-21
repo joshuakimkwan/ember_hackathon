@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import logging
 
 # Configure the root logger
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(filename = 'app.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filemode = 'a')
 
 # --- API Configuration ---
 BASE_URL = "https://mock-api.roostoo.com"
@@ -223,6 +223,7 @@ def cancel_order(order_id=None, pair=None):
 # Own Functions
 # ------------------------------
 async def process_ticker(ticker):
+    time.sleep(0.1)
     time_now = _get_timestamp()
 
     try:
@@ -398,12 +399,13 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
         if spread.iloc[-1] < 0.001:
             # SELL at market order. SELL will close entire position for simplicity
             logging.info(f"Sending SELL Order for {pair_or_coin} with quantity {current_position}")
+            balance = get_balance()
+            current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
             order = place_order(pair_or_coin, "SELL", current_position)
             logging.info(f"Order info: {order}")
             quantity_buy = order["OrderDetail"]["Quantity"]
             price = order["OrderDetail"]["Price"]
             PnL = (price_bought - price) * current_position * (1 - float(order["OrderDetail"]["CommissionPercent"]))
-            balance = get_balance()
             add_pfo_orders(order["OrderDetail"], "./portfolio.csv")
             add_to_pnl(order["OrderDetail"], price_bought, PnL, "./pnl.csv")
         else:
@@ -415,8 +417,10 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                         if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
                             limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                             # 挂单
-                            order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
                             balance = get_balance()
+                            current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
+                            order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
+            
                             add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
             # else:
             #     limit_price = ma20 + 1.5 * atr
@@ -595,6 +599,15 @@ async def main():
     )
     print(f"Finished at {time.strftime('%X')}")
 
+def create_csvs(tickers):
+    for ticker in tickers:
+        filepath = f"{ticker.replace('/','_')}.csv"
+        try:
+            if not os.path.exists(filepath):
+                headers = ["Timestamp", "MaxBid", "MaxAsk", "LastPrice", "Change", "CoinTradeValue", "UnitTradeValue"]
+                append_to_csv(filepath, headers)
+        except Exception as e:
+            logging.error(f"Error processing {ticker}: {e}")
 
 # ------------------------------
 # Quick Demo Section
@@ -605,6 +618,13 @@ if __name__ == "__main__":
     logging.info("--- Checking Current Balance")
     balance = get_balance()
     logging.info(balance)
+
+    logging.info("--- Getting Exchange Info ---")
+    info = get_exchange_info()
+
+    logging.info("--- Creating CSVs ---")
+    ticker_list = list(info.get('TradePairs', {}).keys())
+    create_csvs(ticker_list)   
 
     logging.info("--- Creating necessary files if they don't exist ---")
     create_headers()
@@ -619,8 +639,6 @@ if __name__ == "__main__":
     logging.info("--- Checking Server Time ---")
     logging.info(check_server_time())
 
-    logging.info("--- Getting Exchange Info ---")
-    info = get_exchange_info()
 
     # if info:
     #     print(f"Available Pairs: {list(info.get('TradePairs', {}).keys())}")
