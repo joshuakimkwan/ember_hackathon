@@ -9,7 +9,7 @@ import asyncio
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
-
+# made change
 # Configure the root logger
 logging.basicConfig(filename = 'app.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filemode = 'a')
 
