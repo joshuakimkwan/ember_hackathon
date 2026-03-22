@@ -311,6 +311,15 @@ def calculate_ATR(df, time_period, column):
     ATR = df[column].diff().abs().rolling(window=time_period).mean()
     return ATR
 
+def clear_previous_mkt_data(ticker_list, short=20, long=50):
+    for ticker in ticker_list: 
+        path = f"./{ticker.replace('/', '_')}" + ".csv"
+        if os.path.getsize(path) == 0:
+            continue
+        df = pd.read_csv(path)
+        df.drop(df.index, inplace=True)
+        df.to_csv(path, index=False) # Update the csv
+
 async def compute_metrics(ticker_list, short=20, long=50):
     # Compute the DEMA 
     # Convert csv to pandas dataframe for computation of DEMA
@@ -320,7 +329,10 @@ async def compute_metrics(ticker_list, short=20, long=50):
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
-        
+        print("="*30)
+        print(ticker)
+        print(df.head)
+        print("="*30)
         df["DEMA_Short"] = calculate_double_EMA(df, short, "LastPrice")
         df["DEMA_Long"] = calculate_double_EMA(df, long, "LastPrice")
         df["MA"] = calculate_MA(df, short, "LastPrice")
@@ -696,12 +708,6 @@ def create_csvs(tickers):
 # ------------------------------
 if __name__ == "__main__":
     all_orders = query_order()
-
-    logging.info("--- Getting Exchange Info ---")
-    print("Populating csv in startup...")
-    info = get_exchange_info()
-    ticker_list = list(info.get('TradePairs', {}).keys())
-    asyncio.run(tickers_to_csv_on_start(ticker_list))
     
     logging.info("--- Checking Current Balance")
     balance = get_balance()
@@ -717,22 +723,26 @@ if __name__ == "__main__":
     logging.info("--- Creating necessary files if they don't exist ---")
     create_headers()
 
+    logging.info("--- Clearing old market data ---")
+    clear_previous_mkt_data(ticker_list)
+
+    logging.info("--- Getting Updated Exchange Info ---")
+    asyncio.run(tickers_to_csv_on_start(ticker_list))
+
     logging.info("--- Remove all pending trades ---")
     remove_pending_orders(all_orders)
 
     logging.info("--- Validate all trades ---")
     check_portfolio(all_orders)
 
-
     logging.info("--- Checking Server Time ---")
     logging.info(check_server_time())
-
 
     # if info:
     #     print(f"Available Pairs: {list(info.get('TradePairs', {}).keys())}")
     
     # logging.info("--- Running query_order ---")
-    logging.info(query_order(None, "CRV/USD"))
+    # logging.info(query_order(None, "CRV/USD"))
 
     # print("\n--- Getting Market Ticker (BTC/USD) ---")
     # ticker = get_ticker("BTC/USD")
@@ -745,7 +755,6 @@ if __name__ == "__main__":
     #print([order["Status"] for order in query_order(None, "ADA/USD")["OrderMatched"]])
     while True:
         asyncio.run(main())
-        query_pending_trades()
 
     # print("\n--- Checking Pending Orders ---")
     # print(get_pending_count())
