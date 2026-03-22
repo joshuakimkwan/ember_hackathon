@@ -250,7 +250,13 @@ async def process_ticker(ticker):
     except Exception as e:
         logging.error(f"Error processing {ticker}: {e}")
 
+async def tickers_to_csv_on_start(ticker_list):
+    for _ in range(101):
+        tasks = [process_ticker(ticker) for ticker in ticker_list]
+        # 并发执行
+        await asyncio.gather(*tasks)
 
+    
 # 主函数（并发执行）
 async def tickers_to_csv(ticker_list):
     tasks = [process_ticker(ticker) for ticker in ticker_list]
@@ -498,6 +504,75 @@ def add_to_pnl(order, init_price, PnL, csv_file = "./pnl.csv"):
     df.loc[len(df)] = new_row_value
     df.to_csv(csv_file, index = False)
 
+    """
+    query_order("BNB/USD", pending_only=False) returns:
+    query_order returns:
+    {
+    "Success": true,
+    "ErrMsg": "",
+    "OrderMatched": [
+        {"Pair": "BNB/USD",
+            "OrderID": 2795709,
+            "Status": "FILLED",
+            "Role": "TAKER",
+            "ServerTimeUsage": 0.004961759,
+            "CreateTimestamp": 1774103089466,
+            "FinishTimestamp": 1774103089471,
+            "Side": "BUY",
+            "Type": "MARKET",
+            "StopType": "GTC",
+            "Price": 645.27,
+            "Quantity": 0.542,
+            "FilledQuantity": 0.542,
+            "FilledAverPrice": 645.27,
+            "CoinChange": 0.542,
+            "UnitChange": 349.73634,
+            "CommissionCoin": "USD",
+            "CommissionChargeValue": 0.349736,
+            "CommissionPercent": 0.001,
+            "OrderWalletType": "SPOT",
+            "OrderSource": "PUBLIC_API"},
+        {"Pair": "BNB/USD",
+            "OrderID": 2782035,
+            "Status": "FILLED",
+            "Role": "TAKER",
+            "ServerTimeUsage": 0.004498809,
+            "CreateTimestamp": 1774076845620,
+            "FinishTimestamp": 1774076845624,
+            "Side": "SELL",
+            "Type": "MARKET",
+            "StopType": "GTC",
+            "Price": 643,
+            "Quantity": 0.14,
+            "FilledQuantity": 0.14,
+            "FilledAverPrice": 643,
+            "CoinChange": 0.14,
+            "UnitChange": 90.02,
+            "CommissionCoin": "USD",
+            "CommissionChargeValue": 0.09002,
+            "CommissionPercent": 0.001,
+            "OrderWalletType": "SPOT",
+            "OrderSource": "PUBLIC_API"}
+        ]
+    }
+    """
+    # New implementation below (proposed)
+    # order is a query_order object as per the comment above
+    # remember to change the function create_headers() headers if we are using the below implementation for pnl folder
+    # df = pd.read_csv(csv_file)
+    # order_detail = order["OrderMatched"]
+    # if order_detail["Side"] == "BUY":
+    #     price_bought = order_detail["FilledAverPrice"] * order_detail["FilledQuantity"]
+    #     price_sold = 0
+    # elif order_detail["Side"] == "SELL":
+    #     price_bought = 0
+    #     price_sold = order_detail["FilledAverPrice"] * order_detail["FilledQuantity"]
+    # PnL = price_sold - price_bought
+    # new_row_value = [order_detail["OrderID"], order_detail["FinishTimestamp"], order_detail["Pair"], price_bought, price_sold, order_detail["Quantity"], PnL, order_detail["CommissionChargeValue"]]
+    # df.loc[len(df)] = new_row_value
+    # df.to_csv(csv_file, index = False)
+    
+
 def add_pfo_orders(order, csv_file = "./portfolio.csv"): 
     df = pd.read_csv(csv_file)
     headers = df.columns
@@ -621,6 +696,12 @@ def create_csvs(tickers):
 # ------------------------------
 if __name__ == "__main__":
     all_orders = query_order()
+
+    logging.info("--- Getting Exchange Info ---")
+    print("Populating csv in startup...")
+    info = get_exchange_info()
+    ticker_list = list(info.get('TradePairs', {}).keys())
+    asyncio.run(tickers_to_csv_on_start(ticker_list))
     
     logging.info("--- Checking Current Balance")
     balance = get_balance()
