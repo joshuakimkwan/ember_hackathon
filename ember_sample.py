@@ -328,6 +328,9 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
     spread = df["MaxBid"] - df["MinAsk"]
     mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
+    if mid_spread.shape[0] == 0:
+        logging.info(f"No mid_spread currently exists for {pair_or_coin}")
+        return 
     quantity_buy = buy_expenditure / mid_spread.iloc[-1]
 
     ### COMBINING SCTIONS
@@ -608,7 +611,7 @@ def create_csvs(tickers):
         filepath = f"{ticker.replace('/','_')}.csv"
         try:
             if not os.path.exists(filepath):
-                headers = ["Timestamp", "MaxBid", "MaxAsk", "LastPrice", "Change", "CoinTradeValue", "UnitTradeValue"]
+                headers = ["Timestamp", "MaxBid", "MinAsk", "LastPrice", "Change", "CoinTradeValue", "UnitTradeValue"]
                 append_to_csv(filepath, headers)
         except Exception as e:
             logging.error(f"Error processing {ticker}: {e}")
