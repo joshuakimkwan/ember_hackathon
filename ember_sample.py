@@ -363,12 +363,12 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
 
     balance = get_balance()
     curr_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
-    current_position = round(curr_position, info['TradePairs'][pair_or_coin]['AmountPrecision'])
+    current_position = curr_position
     # if not curr_position.empty:
     #     current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
     # else:
     #     current_position = 0
-    ticker = get_ticker(pair_or_coin)["Data"][pair_or_coin]
+    
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
     if not current_position \
         and df["DEMA_Short"].iloc[-1] > df["DEMA_Long"].iloc[-1] \
@@ -377,6 +377,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # BUY at market order, followed by immediately updating portfolio
+            ticker = get_ticker(pair_or_coin)["Data"][pair_or_coin]
             if ticker["LastPrice"]*quantity_buy_market >= info['TradePairs'][pair_or_coin]['MiniOrder']:
                 logging.info(f"Sending BUY Order for {pair_or_coin} with quantity {quantity_buy_market}")
                 order = place_order(pair_or_coin, "BUY", quantity_buy_market)
@@ -421,6 +422,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
             # SELL at market order. SELL will close entire position for simplicity
             # balance = get_balance()
             # current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free'] CHANGED
+            ticker = get_ticker(pair_or_coin)["Data"][pair_or_coin]
             if ticker["LastPrice"]*current_position >= info['TradePairs'][pair_or_coin]['MiniOrder']:
                 logging.info(f"Sending SELL Order for {pair_or_coin} with quantity {current_position}")
                 order = place_order(pair_or_coin, "SELL", current_position)
