@@ -230,15 +230,19 @@ async def process_ticker(ticker):
     try:
         # 把同步函数变成异步执行（线程池）
         tdata = await asyncio.to_thread(get_ticker, ticker)
+        file_name = ticker.replace("/", "_")
+        path = f"./ticker_csv/{file_name}.csv"
 
         if tdata and tdata.get("Success") is True:
             info = tdata.get("Data", {}).get(ticker, {})
         else:
             logging.info(f"Failed to get data for {ticker}")
-            open(f"./ticker_csv/{ticker.replace('/', '_')}.csv", "w").close()
-            return
-        file_name = ticker.replace("/", "_")
-        path = f"./ticker_csv/{file_name}.csv"
+            if os.path.exists(path):
+                return
+            else:
+                headers = ["Timestamp", "MaxBid", "MinAsk", "LastPrice", "Change", "CoinTradeValue", "UnitTradeValue"]
+                append_to_csv(path, headers)
+        
         # 如果文件不存在 → 写header
         if not os.path.exists(path):
             headers = ["Timestamp"] + list(info.keys())
