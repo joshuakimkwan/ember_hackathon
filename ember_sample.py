@@ -323,7 +323,10 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     quantity_buy_limit = round(quantity_buy * 0.7, coin_info['AmountPrecision'])  # 70% for limit order
     quantity_buy_market = round(quantity_buy * 0.3, coin_info['AmountPrecision'])  # 30% for market order
 
+    balance = get_balance()
     curr_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
+    curr_cash = balance['SpotWallet']["USD"]["Free"]
+
     current_position = round(curr_position, coin_info['AmountPrecision'])
     
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
