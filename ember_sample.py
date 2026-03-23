@@ -330,7 +330,8 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     current_position = round(curr_position, coin_info['AmountPrecision'])
     
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
-    if not current_position \
+    # Current_position condition updated to current_position < 0.1 due to floating point error in the get_balance
+    if current_position <= 0.1 \
         and df["DEMA_Short"].iloc[-1] > df["DEMA_Long"].iloc[-1] \
         and curr_cash > buy_expenditure:
         logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
@@ -382,7 +383,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
-    elif current_position \
+    elif current_position > 0.1 \
         and df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1]:
         logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
         # For now, do market order if spread is < 0.001
