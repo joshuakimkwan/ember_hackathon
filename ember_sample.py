@@ -324,7 +324,7 @@ async def compute_metrics(ticker_list, short=10, long=30):
             df["DEMA_Long"] = calculate_double_EMA(df, 30, "LastPrice")
             df["MA"] = calculate_MA(df, 20, "LastPrice")
             df["ATR"] = calculate_ATR(df, 20, "LastPrice")
-            df["RSI"] = calculate_RSI(df, "LastPrice", 7) # RSI<25 BUY, else SELL
+            df["RSI"] = calculate_RSI(df, "LastPrice", 7) # RSI<20 BUY, RSI>80 SELL
             df["EMA12"] = calculate_EMA(df, "LastPrice", 12) # EMA12>EMA50 BUY, else SELL
             df["EMA50"] = calculate_EMA(df, "LastPrice", 50)
         while len(df) > 2*rows - 1:
@@ -371,7 +371,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     # Current_position condition updated to current_position < 0.1 due to floating point error in the get_balance
     if current_position <= 0.1 \
         and df["DEMA_Short"].iloc[-1] > df["DEMA_Long"].iloc[-1] \
-        and df["RSI"].iloc[-1] < 25 \
+        and df["RSI"].iloc[-1] < 20 \
         and df["EMA12"].iloc[-1] > df["EMA50"].iloc[-1] \
         and curr_cash > buy_expenditure:
         logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
@@ -425,7 +425,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
     elif current_position > 0.1 \
         and df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1] \
-        and df["RSI"].iloc[-1] > 75 \
+        and df["RSI"].iloc[-1] > 80 \
         and df["EMA12"].iloc[-1] < df["EMA50"].iloc[-1]:
         logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
         # For now, do market order if spread is < 0.001
