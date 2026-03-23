@@ -287,10 +287,11 @@ async def compute_metrics(ticker_list, short=20, long=50):
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
-        df["DEMA_Short"] = calculate_double_EMA(df, short, "LastPrice")
-        df["DEMA_Long"] = calculate_double_EMA(df, long, "LastPrice")
-        df["MA"] = calculate_MA(df, short, "LastPrice")
-        df["ATR"] = calculate_ATR(df, short, "LastPrice")
+        if len(df) >= 2 * long - 1:
+            df["DEMA_Short"] = calculate_double_EMA(df, short, "LastPrice")
+            df["DEMA_Long"] = calculate_double_EMA(df, long, "LastPrice")
+            df["MA"] = calculate_MA(df, short, "LastPrice")
+            df["ATR"] = calculate_ATR(df, short, "LastPrice")
         while len(df) > 2*long - 1:
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
@@ -298,6 +299,9 @@ async def compute_metrics(ticker_list, short=20, long=50):
 def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     # TODO Iterate through CSV. (Added: CSV should be maintained at (2*long_time_period-1) rows)
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
+    if len(df) < 99:
+        return
+
     spread = df["MaxBid"] - df["MinAsk"]
     mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
     if mid_spread.shape[0] == 0:
@@ -340,10 +344,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                 logging.info(f"Sending BUY Order for {pair_or_coin} with quantity {quantity_buy_market}")
                 order = place_order(pair_or_coin, "BUY", quantity_buy_market)
                 logging.info(f"Order info: {order}")
-                quantity_buy = order["OrderDetail"]["Quantity"]
-                price = order["OrderDetail"]["Price"]
-                balance = get_balance()
-                add_pfo_orders(order["OrderDetail"], "./portfolio.csv")
+                update_pfo(order["OrderDetail"]["Pair"])
         else:
             # BUY at limit order
             # 如果没有挂单或者现有挂单价格偏离过大，可以挂新的
@@ -374,7 +375,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
     elif current_position \
         and df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1]:
-        price_bought = portfolio.loc[portfolio["Pair"] == pair_or_coin, "Price"].values
+        #price_bought = portfolio.loc[portfolio["Pair"] == pair_or_coin, "Price"].values
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # SELL at market order. SELL will close entire position for simplicity
@@ -387,9 +388,9 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                 logging.info(f"Order info: {order}")
                 quantity_buy = order["OrderDetail"]["Quantity"]
                 price = order["OrderDetail"]["Price"]
-                PnL = (price_bought - price) * current_position * (1 - float(order["OrderDetail"]["CommissionPercent"]))
-                add_pfo_orders(order["OrderDetail"], "./portfolio.csv")
-                add_to_pnl(order["OrderDetail"], price_bought, PnL, "./pnl.csv")
+                #PnL = (price_bought - price) * current_position * (1 - float(order["OrderDetail"]["CommissionPercent"]))
+                update_pfo(order["OrderDetail"]["Pair"])
+                #add_to_pnl(order["OrderDetail"], price_bought, PnL, "./pnl.csv")
         else:
             if pending_orders:
                 for order in pending_orders:
@@ -446,7 +447,8 @@ def remove_pending_orders(orders):
             logging.info(f"Order {order_id} has been cancelled")
             cancel_order(order_id, pair)
 
-def update_pfo(balance, csv_file = "./portfolio_v2.csv", pair = None):
+def update_pfo(pair = None, csv_file = "./portfolio.csv"):
+    balance = get_balance()
     df = pd.read_csv(csv_file)
     all_coins = balance['SpotWallet']
     if pair:
@@ -460,7 +462,7 @@ def update_pfo(balance, csv_file = "./portfolio_v2.csv", pair = None):
 
 def create_headers():
     logging.info("Creating necessary files")
-    headers = ["Pair", "OrderID", "Status", "CreateTimestamp", "FinishTimestamp", "Side", "Type", "Price", "Quantity"]
+    headers = ["Pair", "Quantity"]
     try:
         os.remove("./portfolio.csv")
     except FileNotFoundError:
@@ -470,16 +472,6 @@ def create_headers():
             pass
     except FileNotFoundError:
         append_to_csv("./portfolio.csv", headers)
-    headers_v2 = ["Pair", "Quantity"]
-    try:
-        os.remove("./portfolio_v2.csv")
-    except FileNotFoundError:
-        logging.error("./portfolio_v2.csv not found. Continuing...")
-    try:
-        with open("./portfolio_v2.csv", 'r') as f:
-            pass
-    except FileNotFoundError:
-        append_to_csv("./portfolio_v2.csv", headers_v2)
     po_headers = ["OrderID"]
     try:
         with open("./pending_orders.csv") as f:
@@ -567,45 +559,6 @@ def add_to_pnl(order, init_price, PnL, csv_file = "./pnl.csv"):
     # df.loc[len(df)] = new_row_value
     # df.to_csv(csv_file, index = False)
     
-
-def add_pfo_orders(order, csv_file = "./portfolio.csv"): 
-    df = pd.read_csv(csv_file)
-    headers = df.columns
-    odata = []
-    for head in headers:
-        odata.append(order[head])
-    if not df[df["OrderID"] == int(order["OrderID"])].empty:
-        logging.info(f"Order {order['OrderID']} has been already added to {csv_file}")
-    else:
-        side = df.loc[df["Pair"] == order["Pair"], "Side"]
-        if side.empty:
-            logging.info(f"Added {odata} into {csv_file}")
-            df.loc[len(df)] = odata
-        else:
-            pfo_side = 1 if side.iloc[0] == "BUY" else -1
-            order_side = 1 if order["Side"] == "BUY" else -1
-
-            new_quantity = df.loc[df["Pair"] == order["Pair"], "Quantity"].iloc[0] * pfo_side + order["Quantity"] * order_side
-            if new_quantity == 0:
-                logging.info(f"Empty quantity found for {order['Pair']}, removing pair from portfolio")
-                drop_index = df[df["Pair"] == order["Pair"]].index
-                df.drop(drop_index, inplace = True)
-            else: 
-                new_price = ( df.loc[df["Pair"] == order["Pair"], "Price"].iloc[0] * df.loc[df["Pair"] == order["Pair"], "Quantity"].iloc[0] * pfo_side + \
-                        order["Quantity"] * order["Price"] * order_side ) / \
-                        new_quantity      
-                if new_quantity < 0:
-                    logging.info(f"New price {new_price} and quantity {new_quantity} found for {order['Pair']}")
-                    df.loc[df["Pair"] == order["Pair"], "Side"] = "SELL"
-                    df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
-                    df.loc[df["Pair"] == order["Pair"], "Quantity"] = balance['SpotWallet'][order['Pair'].replace('/USD','')]['Free']
-                else:
-                    logging.info(f"New price {new_price} and quantity {new_quantity} found for {order['Pair']}")
-                    df.loc[df["Pair"] == order["Pair"], "Side"] = "BUY"
-                    df.loc[df["Pair"] == order["Pair"], "Price"] = new_price
-                    df.loc[df["Pair"] == order["Pair"], "Quantity"] = balance['SpotWallet'][order['Pair'].replace('/USD','')]['Free']
-        df.to_csv(csv_file, index = False)
-
 def add_pending_orders(order, csv_file = "./pending_orders.csv", drop = False):
     df = pd.read_csv(csv_file)
     if drop:
@@ -614,22 +567,10 @@ def add_pending_orders(order, csv_file = "./pending_orders.csv", drop = False):
         df.drop(drop_index, inplace = True)
         df.to_csv(csv_file, index = False)
         if order["Status"] == "FILLED":
-            add_pfo_orders(order, "./portfolio.csv")
+            update_pfo(order["Pair"])
     else:
         logging.info(f"Added {order} to {csv_file}")
         append_to_csv(order["OrderID"], csv_file)
-
-
-def check_portfolio(orders):
-    if orders["Success"] == False:
-        return
-    for order in orders["OrderMatched"]:
-        status = order["Status"]
-        if status == "FILLED":
-            # Add to portfolio.csv
-            add_pfo_orders(order, "./portfolio.csv")
-        else:
-            continue
 
 async def poll_for_trades(ticker_list):
     portfolio = pd.read_csv("./portfolio.csv")
@@ -653,7 +594,7 @@ def query_pending_trades():
             add_pending_orders(order, "./pending_orders.csv", True)
         elif order["Status"] == "FILLED":
             add_pending_orders(order, "./pending_orders.csv", True)
-            add_pfo_orders(order, "./porfolio.csv")
+            update_pfo(order["Pair"])
         else:
             continue
 
@@ -723,14 +664,11 @@ if __name__ == "__main__":
     logging.info("--- Creating Utility CSVs ---")
     create_headers()
 
-    logging.info("--- Updating Portfolio_v2 CSV ---")
-    update_pfo(balance)
+    logging.info("--- Updating Portfolio CSV ---")
+    update_pfo()
 
     logging.info("--- Remove all pending trades ---")
     remove_pending_orders(all_orders)
-
-    logging.info("--- Validate all trades ---")
-    check_portfolio(all_orders)
 
     logging.info("--- Checking Server Time ---")
     logging.info(check_server_time())
