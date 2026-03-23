@@ -330,7 +330,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     if not current_position \
         and df["DEMA_Short"].iloc[-1] > df["DEMA_Long"].iloc[-1] \
         and curr_cash > buy_expenditure:
-        logging.info(f"Current_position {current_position}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
+        logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
 
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
@@ -340,7 +340,11 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                 logging.info(f"Sending BUY Order for {pair_or_coin} with quantity {quantity_buy_market}")
                 order = place_order(pair_or_coin, "BUY", quantity_buy_market)
                 logging.info(f"Order info: {order}")
-                update_pfo(order["OrderDetail"]["Pair"])
+                try:
+                    update_pfo(order["OrderDetail"]["Pair"])
+                except:
+                    logging.error(order["ErrMsg"])
+                
         else:
             # BUY at limit order
             # 如果没有挂单或者现有挂单价格偏离过大，可以挂新的
@@ -356,7 +360,10 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                             # 挂单
                             if limit_price*quantity_buy_limit >= coin_info['MiniOrder']:
                                 order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
-                                add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                                try:
+                                    add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                                except:
+                                    logging.error(order["ErrMsg"])
             else:
                 logging.info(f"[BUY] Not pending Orders: {pending_orders}")
                 limit_price = ma20 - 1.5 * atr
@@ -365,13 +372,16 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                     # 挂单
                     if limit_price*quantity_buy_limit >= coin_info['MiniOrder']:
                         order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
-                        add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                        try:
+                            add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                        except:
+                            logging.error(order["ErrMsg"])
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
     elif current_position \
         and df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1]:
-        logging.info(f"Current_position {current_position}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
+        logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # SELL at market order. SELL will close entire position for simplicity
@@ -380,9 +390,12 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                 logging.info(f"Sending SELL Order for {pair_or_coin} with quantity {current_position}")
                 order = place_order(pair_or_coin, "SELL", current_position)
                 logging.info(f"Order info: {order}")
-                quantity_buy = order["OrderDetail"]["Quantity"]
-                price = order["OrderDetail"]["Price"]
-                update_pfo(order["OrderDetail"]["Pair"])
+                try:
+                    quantity_buy = order["OrderDetail"]["Quantity"]
+                    price = order["OrderDetail"]["Price"]
+                    update_pfo(order["OrderDetail"]["Pair"])
+                except:
+                    logging.error(order["ErrMsg"])
         else:
             if pending_orders:
                 logging.info(f"[SELL] Pending Orders: {pending_orders}")
@@ -395,7 +408,10 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                             # 挂单
                             if limit_price*current_position >= coin_info['MiniOrder']:
                                 order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
-                                add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                                try:
+                                    add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                                except:
+                                    logging.error(order["ErrMsg"])
             # else:
             #     limit_price = ma20 + 1.5 * atr
             #     if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
