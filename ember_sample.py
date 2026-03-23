@@ -9,9 +9,10 @@ import asyncio
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
+import glob 
 # made change
 # Configure the root logger
-logging.basicConfig(filename = 'app.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filemode = 'a')
+logging.basicConfig(filename = 'app.log', level=logging.INFO, format='%(asctime)s [%(levelname)s] [%(funcName)s] %(message)s', filemode = 'a')
 
 # --- API Configuration ---
 BASE_URL = "https://mock-api.roostoo.com"
@@ -234,10 +235,10 @@ async def process_ticker(ticker):
             info = tdata.get("Data", {}).get(ticker, {})
         else:
             logging.info(f"Failed to get data for {ticker}")
-            open(f"{ticker.replace('/', '_')}.csv", "w").close()
+            open(f"./ticker_csv/{ticker.replace('/', '_')}.csv", "w").close()
             return
         file_name = ticker.replace("/", "_")
-        path = f"./{file_name}.csv"
+        path = f"./ticker_csv/{file_name}.csv"
         # 如果文件不存在 → 写header
         if not os.path.exists(path):
             headers = ["Timestamp"] + list(info.keys())
@@ -249,46 +250,12 @@ async def process_ticker(ticker):
 
     except Exception as e:
         logging.error(f"Error processing {ticker}: {e}")
-
-async def tickers_to_csv_on_start(ticker_list):
-    for _ in range(101):
-        tasks = [process_ticker(ticker) for ticker in ticker_list]
-        # 并发执行
-        await asyncio.gather(*tasks)
-
-    
+  
 # 主函数（并发执行）
 async def tickers_to_csv(ticker_list):
     tasks = [process_ticker(ticker) for ticker in ticker_list]
     # 并发执行
     await asyncio.gather(*tasks)
-
-# async def tickers_to_csv(ticker_list):
-#     # TODO Change this to run asynchronously 
-#     time_now = _get_timestamp()
-#     for ticker in ticker_list:
-#         tdata = get_ticker(ticker)
-
-#         if tdata and tdata["Success"] == True:
-#             info = tdata.get("Data", {}).get(ticker, {})
-#         else:
-#             logging.info(f"Failed to get data for {ticker}")
-#             with open(f"{ticker.replace('/', '_')}.csv", "w") as f:
-#                 pass
-#             continue
-
-#         file_name = ticker.replace("/", "_")
-#         path = f"./{file_name}.csv"
-#         try:
-#             with open(path, 'r') as f:
-#                 pass
-#         except FileNotFoundError:
-#             headers = ["Timestamp"]
-#             headers += list(info.keys())
-#             append_to_csv(path, headers)
-#         upload_info = [time_now] 
-#         upload_info += list(info.values())
-#         append_to_csv(path, upload_info)
 
 ### Metrics Computation
 
@@ -311,21 +278,12 @@ def calculate_ATR(df, time_period, column):
     ATR = df[column].diff().abs().rolling(window=time_period).mean()
     return ATR
 
-def clear_previous_mkt_data(ticker_list, short=20, long=50):
-    for ticker in ticker_list: 
-        path = f"./{ticker.replace('/', '_')}" + ".csv"
-        if os.path.getsize(path) == 0:
-            continue
-        df = pd.read_csv(path)
-        df.drop(df.index, inplace=True)
-        df.to_csv(path, index=False) # Update the csv
-
 async def compute_metrics(ticker_list, short=20, long=50):
     # Compute the DEMA 
     # Convert csv to pandas dataframe for computation of DEMA
     # Remove earliest row if length exceeds 2*long_period - 1
     for ticker in ticker_list: 
-        path = f"./{ticker.replace('/', '_')}" + ".csv"
+        path = f"./ticker_csv/{ticker.replace('/', '_')}" + ".csv"
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
@@ -485,11 +443,23 @@ def remove_pending_orders(orders):
         pair = order["Pair"]
         status = order["Status"]
         if status == "PENDING":
-            logging.info(f"[remove_pending_orders] Order {order_id} has been cancelled")
+            logging.info(f"Order {order_id} has been cancelled")
             cancel_order(order_id, pair)
 
+def update_pfo(balance, csv_file = "./portfolio_v2.csv", pair = None):
+    df = pd.read_csv(csv_file)
+    all_coins = balance['SpotWallet']
+    if pair:
+        df.loc[df["Pair"] == pair, "Quantity"] = all_coins[pair]['Free']
+    for coin in all_coins:
+        curr_coin_bal = all_coins[coin]['Free']
+        if curr_coin_bal <= 0:
+            continue
+        df.loc[len(df)] = [coin, curr_coin_bal]
+    df.to_csv(csv_file, index = False)
 
 def create_headers():
+    logging.info("Creating necessary files")
     headers = ["Pair", "OrderID", "Status", "CreateTimestamp", "FinishTimestamp", "Side", "Type", "Price", "Quantity"]
     try:
         os.remove("./portfolio.csv")
@@ -500,6 +470,16 @@ def create_headers():
             pass
     except FileNotFoundError:
         append_to_csv("./portfolio.csv", headers)
+    headers_v2 = ["Pair", "Quantity"]
+    try:
+        os.remove("./portfolio_v2.csv")
+    except FileNotFoundError:
+        logging.error("./portfolio_v2.csv not found. Continuing...")
+    try:
+        with open("./portfolio_v2.csv", 'r') as f:
+            pass
+    except FileNotFoundError:
+        append_to_csv("./portfolio_v2.csv", headers_v2)
     po_headers = ["OrderID"]
     try:
         with open("./pending_orders.csv") as f:
@@ -654,7 +634,7 @@ def check_portfolio(orders):
 async def poll_for_trades(ticker_list):
     portfolio = pd.read_csv("./portfolio.csv")
     for ticker in ticker_list:
-        path = f"{ticker.replace('/','_')}.csv"
+        path = f"./ticker_csv/{ticker.replace('/','_')}.csv"
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
@@ -697,8 +677,10 @@ async def main():
     print(f"Finished at {time.strftime('%X')}")
 
 def create_csvs(tickers):
+    folder_path = "./ticker_csv/"
+    os.makedirs(folder_path, exist_ok = True)
     for ticker in tickers:
-        filepath = f"{ticker.replace('/','_')}.csv"
+        filepath = f"./{folder_path}/{ticker.replace('/','_')}.csv"
         try:
             if not os.path.exists(filepath):
                 headers = ["Timestamp", "MaxBid", "MinAsk", "LastPrice", "Change", "CoinTradeValue", "UnitTradeValue"]
@@ -706,31 +688,43 @@ def create_csvs(tickers):
         except Exception as e:
             logging.error(f"Error processing {ticker}: {e}")
 
+def remove_files():
+    folder_path = './ticker_csv/'
+    csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
+
+    for file_path in csv_files:
+        try:
+            os.remove(file_path)
+            logging.info(f"Removed {file_path} on startup")
+        except Exception as e:
+            logging.error(f"Error removing {file_path}: {e}")
+
 # ------------------------------
 # Quick Demo Section
 # ------------------------------
 if __name__ == "__main__":
     all_orders = query_order()
+
+    logging.info("--- Remove all temporary data ---")
+    remove_files()
     
-    logging.info("--- Checking Current Balance")
+    logging.info("--- Checking Current Balance ---")
     balance = get_balance()
     logging.info(balance)
 
     logging.info("--- Getting Exchange Info ---")
     info = get_exchange_info()
+    logging.info(info)
 
-    logging.info("--- Creating CSVs ---")
+    logging.info("--- Creating Ticker CSVs ---")
     ticker_list = list(info.get('TradePairs', {}).keys())
     create_csvs(ticker_list)   
 
-    logging.info("--- Creating necessary files if they don't exist ---")
+    logging.info("--- Creating Utility CSVs ---")
     create_headers()
 
-    logging.info("--- Clearing old market data ---")
-    clear_previous_mkt_data(ticker_list)
-
-    logging.info("--- Getting Updated Exchange Info ---")
-    asyncio.run(tickers_to_csv_on_start(ticker_list))
+    logging.info("--- Updating Portfolio_v2 CSV ---")
+    update_pfo(balance)
 
     logging.info("--- Remove all pending trades ---")
     remove_pending_orders(all_orders)
