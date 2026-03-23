@@ -324,8 +324,11 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     quantity_buy_market = round(quantity_buy * 0.3, coin_info['AmountPrecision'])  # 30% for market order
 
     balance = get_balance()
-    curr_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
-    curr_cash = balance['SpotWallet']["USD"]["Free"]
+    try:
+        curr_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
+        curr_cash = balance['SpotWallet']["USD"]["Free"]
+    except:
+        logging.error(f"Failed to get balance: {balance}")
 
     current_position = round(curr_position, coin_info['AmountPrecision'])
     
