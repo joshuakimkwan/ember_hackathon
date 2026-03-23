@@ -356,7 +356,6 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                             # 挂单
                             if limit_price*quantity_buy_limit >= coin_info['MiniOrder']:
                                 order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
-                                # balance = get_balance()
                                 add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
             else:
                 logging.info(f"[BUY] Not pending Orders: {pending_orders}")
@@ -366,7 +365,6 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                     # 挂单
                     if limit_price*quantity_buy_limit >= coin_info['MiniOrder']:
                         order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
-                        # balance = get_balance()
                         add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
@@ -377,8 +375,6 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # SELL at market order. SELL will close entire position for simplicity
-            # balance = get_balance()
-            # current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free'] CHANGED
             last_price = df["LastPrice"].iloc[-1]
             if last_price*current_position >= coin_info['MiniOrder']:
                 logging.info(f"Sending SELL Order for {pair_or_coin} with quantity {current_position}")
@@ -397,8 +393,6 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                         if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
                             limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                             # 挂单
-                            # balance = get_balance()
-                            # current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
                             if limit_price*current_position >= coin_info['MiniOrder']:
                                 order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
                                 add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
@@ -449,7 +443,7 @@ def update_pfo(pair = None, csv_file = "./portfolio.csv"):
     df = pd.read_csv(csv_file)
     all_coins = balance['SpotWallet']
     if pair:
-        df.loc[df["Pair"] == pair.replace('/USD',''), "Quantity"] = all_coins[pair]['Free']
+        df.loc[df["Pair"] == pair.replace('/USD',''), "Quantity"] = all_coins[pair.replace('/USD','')]['Free']
     for coin in all_coins:
         curr_coin_bal = all_coins[coin]['Free']
         if curr_coin_bal <= 0:
