@@ -449,7 +449,7 @@ def update_pfo(pair = None, csv_file = "./portfolio.csv"):
     df = pd.read_csv(csv_file)
     all_coins = balance['SpotWallet']
     if pair:
-        df.loc[df["Pair"] == pair, "Quantity"] = all_coins[pair]['Free']
+        df.loc[df["Pair"] == pair.replace('/USD',''), "Quantity"] = all_coins[pair]['Free']
     for coin in all_coins:
         curr_coin_bal = all_coins[coin]['Free']
         if curr_coin_bal <= 0:
