@@ -296,7 +296,7 @@ async def compute_metrics(ticker_list, short=20, long=50):
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
 
-def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
+def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     # TODO Iterate through CSV. (Added: CSV should be maintained at (2*long_time_period-1) rows)
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
     if len(df) < 99:
@@ -304,9 +304,6 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
 
     spread = df["MaxBid"] - df["MinAsk"]
     mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
-    if mid_spread.shape[0] == 0:
-        logging.info(f"No mid_spread currently exists for {pair_or_coin}")
-        return 
     quantity_buy = buy_expenditure / mid_spread.iloc[-1]
 
     ### COMBINING SECTIONS
@@ -320,27 +317,26 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
 
     ma20 = df["MA"].iloc[-1]
     atr = df["ATR"].iloc[-1]
-    quantity_buy_limit = round(quantity_buy * 0.7, info['TradePairs'][pair_or_coin]['AmountPrecision'])  # 70% for limit order
-    quantity_buy_market = round(quantity_buy * 0.3, info['TradePairs'][pair_or_coin]['AmountPrecision'])  # 30% for market order
 
-    balance = get_balance()
+    coin_info = info['TradePairs'][pair_or_coin]
+
+    quantity_buy_limit = round(quantity_buy * 0.7, coin_info['AmountPrecision'])  # 70% for limit order
+    quantity_buy_market = round(quantity_buy * 0.3, coin_info['AmountPrecision'])  # 30% for market order
+
     curr_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
-    current_position = curr_position
-    # if not curr_position.empty:
-    #     current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
-    # else:
-    #     current_position = 0
+    current_position = round(curr_position, coin_info['AmountPrecision'])
     
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
     if not current_position \
         and df["DEMA_Short"].iloc[-1] > df["DEMA_Long"].iloc[-1] \
         and curr_cash > buy_expenditure:
+        logging.info(f"Current_position {current_position}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
 
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # BUY at market order, followed by immediately updating portfolio
-            ticker = get_ticker(pair_or_coin)["Data"][pair_or_coin]
-            if ticker["LastPrice"]*quantity_buy_market >= info['TradePairs'][pair_or_coin]['MiniOrder']:
+            last_price = df["LastPrice"].iloc[-1]
+            if last_price*quantity_buy_market >= coin_info['MiniOrder']:
                 logging.info(f"Sending BUY Order for {pair_or_coin} with quantity {quantity_buy_market}")
                 order = place_order(pair_or_coin, "BUY", quantity_buy_market)
                 logging.info(f"Order info: {order}")
@@ -349,6 +345,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
             # BUY at limit order
             # 如果没有挂单或者现有挂单价格偏离过大，可以挂新的
             if pending_orders:
+                logging.info(f"[BUY] Pending Orders: {pending_orders}")
                 for order in pending_orders:
                     if abs(pending_orders[0]['Price'] - (ma20 - 1.5*atr)) / mid_spread > 0.05:
                         logging.info(f"Cancelling order for {pair_or_coin}")
@@ -357,16 +354,17 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                         if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
                             limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                             # 挂单
-                            if limit_price*quantity_buy_limit >= info['TradePairs'][pair_or_coin]['MiniOrder']:
+                            if limit_price*quantity_buy_limit >= coin_info['MiniOrder']:
                                 order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
                                 # balance = get_balance()
                                 add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
             else:
+                logging.info(f"[BUY] Not pending Orders: {pending_orders}")
                 limit_price = ma20 - 1.5 * atr
                 if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
                     limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
                     # 挂单
-                    if limit_price*quantity_buy_limit >= info['TradePairs'][pair_or_coin]['MiniOrder']:
+                    if limit_price*quantity_buy_limit >= coin_info['MiniOrder']:
                         order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
                         # balance = get_balance()
                         add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
@@ -375,24 +373,23 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
     elif current_position \
         and df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1]:
-        #price_bought = portfolio.loc[portfolio["Pair"] == pair_or_coin, "Price"].values
+        logging.info(f"Current_position {current_position}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # SELL at market order. SELL will close entire position for simplicity
             # balance = get_balance()
             # current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free'] CHANGED
-            ticker = get_ticker(pair_or_coin)["Data"][pair_or_coin]
-            if ticker["LastPrice"]*current_position >= info['TradePairs'][pair_or_coin]['MiniOrder']:
+            last_price = df["LastPrice"].iloc[-1]
+            if last_price*current_position >= coin_info['MiniOrder']:
                 logging.info(f"Sending SELL Order for {pair_or_coin} with quantity {current_position}")
                 order = place_order(pair_or_coin, "SELL", current_position)
                 logging.info(f"Order info: {order}")
                 quantity_buy = order["OrderDetail"]["Quantity"]
                 price = order["OrderDetail"]["Price"]
-                #PnL = (price_bought - price) * current_position * (1 - float(order["OrderDetail"]["CommissionPercent"]))
                 update_pfo(order["OrderDetail"]["Pair"])
-                #add_to_pnl(order["OrderDetail"], price_bought, PnL, "./pnl.csv")
         else:
             if pending_orders:
+                logging.info(f"[SELL] Pending Orders: {pending_orders}")
                 for order in pending_orders:
                     if abs(pending_orders[0]['Price'] - (ma20 + 1.5*atr)) / mid_spread > 0.05:
                         cancel_order(order["OrderID"], pair_or_coin)
@@ -402,7 +399,7 @@ def check_for_trades(df, portfolio, pair_or_coin, curr_cash, buy_expenditure):
                             # 挂单
                             # balance = get_balance()
                             # current_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
-                            if limit_price*current_position >= info['TradePairs'][pair_or_coin]['MiniOrder']:
+                            if limit_price*current_position >= coin_info['MiniOrder']:
                                 order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
                                 add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
             # else:
@@ -573,16 +570,15 @@ def add_pending_orders(order, csv_file = "./pending_orders.csv", drop = False):
         append_to_csv(order["OrderID"], csv_file)
 
 async def poll_for_trades(ticker_list):
-    portfolio = pd.read_csv("./portfolio.csv")
     for ticker in ticker_list:
         path = f"./ticker_csv/{ticker.replace('/','_')}.csv"
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
-        curr_cash = get_balance()["SpotWallet"]["USD"]["Free"]
+        curr_cash = balance["SpotWallet"]["USD"]["Free"]
         threshold = 0.02
         buy_expenditure = min(curr_cash * threshold, 500)
-        check_for_trades(df, portfolio, ticker, curr_cash, buy_expenditure)
+        check_for_trades(df, ticker, curr_cash, buy_expenditure)
 
 def query_pending_trades():
     df = pd.read_csv("./pending_orders.csv").iloc[:,0]
