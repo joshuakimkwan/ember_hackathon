@@ -278,7 +278,38 @@ def calculate_ATR(df, time_period, column):
     ATR = df[column].diff().abs().rolling(window=time_period).mean()
     return ATR
 
-async def compute_metrics(ticker_list, short=20, long=50):
+def calculate_MA20(df, column, time_period=20):
+    MA = df[column].rolling(window=time_period, min_periods=1).mean()
+    return MA
+
+def calculate_MA50(df, column, time_period=50):
+    MA = df[column].rolling(window=time_period, min_periods=1).mean()
+    return MA
+
+def calculate_MA100(df, column, time_period=100):
+    MA = df[column].rolling(window=time_period, min_periods=1).mean()
+    return MA
+
+def calculate_RSI(df, column, period):
+    # Use 25-75
+    delta = df[column].diff()
+
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+
+    rs = avg_gain / avg_loss.replace(0, np.finfo(float).eps)
+
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_EMA(df, column, period):
+    EMA = df[column].ewm(span=period, adjust=False).mean()
+    return EMA
+
+async def compute_metrics(ticker_list, short=10, long=30):
     # Compute the DEMA 
     # Convert csv to pandas dataframe for computation of DEMA
     # Remove earliest row if length exceeds 2*long_period - 1
@@ -287,19 +318,23 @@ async def compute_metrics(ticker_list, short=20, long=50):
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
-        if len(df) >= 2 * long - 1:
-            df["DEMA_Short"] = calculate_double_EMA(df, short, "LastPrice")
-            df["DEMA_Long"] = calculate_double_EMA(df, long, "LastPrice")
-            df["MA"] = calculate_MA(df, short, "LastPrice")
-            df["ATR"] = calculate_ATR(df, short, "LastPrice")
-        while len(df) > 2*long - 1:
+        rows = max(10,20,30,7,12,50)
+        if len(df) >= 2 * rows - 1:
+            df["DEMA_Short"] = calculate_double_EMA(df, 10, "LastPrice")
+            df["DEMA_Long"] = calculate_double_EMA(df, 30, "LastPrice")
+            df["MA"] = calculate_MA(df, 20, "LastPrice")
+            df["ATR"] = calculate_ATR(df, 20, "LastPrice")
+            df["RSI"] = calculate_RSI(df, "LastPrice", 7) # RSI<25 BUY, else SELL
+            df["EMA12"] = calculate_EMA(df, "LastPrice", 12) # EMA12>EMA50 BUY, else SELL
+            df["EMA50"] = calculate_EMA(df, "LastPrice", 50)
+        while len(df) > 2*rows - 1:
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
 
 def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     # TODO Iterate through CSV. (Added: CSV should be maintained at (2*long_time_period-1) rows)
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
-    if len(df) < 99:
+    if len(df) < 99: # check function on compute_metrics for number (2*rows-1)
         return
 
     spread = df["MaxBid"] - df["MinAsk"]
@@ -327,15 +362,17 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     try:
         curr_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
         curr_cash = balance['SpotWallet']["USD"]["Free"]
+        current_position = round(curr_position, coin_info['AmountPrecision'])
     except:
         logging.error(f"Failed to get balance: {balance}")
-
-    current_position = round(curr_position, coin_info['AmountPrecision'])
-    
+        return None
+       
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
     # Current_position condition updated to current_position < 0.1 due to floating point error in the get_balance
     if current_position <= 0.1 \
         and df["DEMA_Short"].iloc[-1] > df["DEMA_Long"].iloc[-1] \
+        and df["RSI"].iloc[-1] < 25 \
+        and df["EMA12"].iloc[-1] > df["EMA50"].iloc[-1] \
         and curr_cash > buy_expenditure:
         logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
 
@@ -387,7 +424,9 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
     elif current_position > 0.1 \
-        and df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1]:
+        and df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1] \
+        and df["RSI"].iloc[-1] > 75 \
+        and df["EMA12"].iloc[-1] < df["EMA50"].iloc[-1]:
         logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
