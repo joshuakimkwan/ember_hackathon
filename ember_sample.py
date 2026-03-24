@@ -615,6 +615,9 @@ def query_pending_trades():
         else:
             continue
 
+async def minute_data():
+    time.sleep(60)
+
 async def main():
     """
     For each ticker, do (while True:)
@@ -631,7 +634,8 @@ async def main():
         await asyncio.gather(
             tickers_to_csv(ticker_list),     # Always keep getting exchange data
             compute_metrics(ticker_list),    # Always recompute DEMA        
-            poll_for_trades(ticker_list)     # Check for trades
+            poll_for_trades(ticker_list),     # Check for trades
+            minute_data()
         )
         print(f"Finished at {time.strftime('%X')}")
     except Exception as e:
