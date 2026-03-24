@@ -317,20 +317,28 @@ async def compute_metrics(ticker_list, short=10, long=30):
     # Compute the DEMA 
     # Convert csv to pandas dataframe for computation of DEMA
     # Remove earliest row if length exceeds 2*long_period - 1
+    period_DS = 10
+    period_DL = 30
+    period_MA = 20
+    period_ATR = 20
+    period_RSI = 7
+    period_EMAS = 12
+    period_EMAL = 50
+    
     for ticker in ticker_list: 
         path = f"./ticker_csv/{ticker.replace('/', '_')}" + ".csv"
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
-        rows = max(10,20,30,7,12,50)
+        rows = max(period_DS, period_DL, period_MA, period_ATR, period_RSI, period_EMAS, period_EMAL)
         if len(df) >= 2 * rows - 1:
-            df["DEMA_Short"] = calculate_double_EMA(df, 10, "LastPrice")
-            df["DEMA_Long"] = calculate_double_EMA(df, 30, "LastPrice")
-            df["MA"] = calculate_MA(df, 20, "LastPrice")
-            df["ATR"] = calculate_ATR(df, 20, "LastPrice")
-            df["RSI"] = calculate_RSI(df, "LastPrice", 7) # RSI<20 BUY, RSI>80 SELL
-            df["EMA12"] = calculate_EMA(df, "LastPrice", 12) # EMA12>EMA50 BUY, else SELL
-            df["EMA50"] = calculate_EMA(df, "LastPrice", 50)
+            df["DEMA_Short"] = calculate_double_EMA(df, period_DS, "LastPrice")
+            df["DEMA_Long"] = calculate_double_EMA(df, period_DL, "LastPrice")
+            df["MA"] = calculate_MA(df, period_MA, "LastPrice")
+            df["ATR"] = calculate_ATR(df, period_ATR, "LastPrice")
+            df["RSI"] = calculate_RSI(df, "LastPrice", period_RSI) # RSI<20 BUY, RSI>80 SELL
+            df["EMA12"] = calculate_EMA(df, "LastPrice", period_EMAS) # EMA12>EMA50 BUY, else SELL
+            df["EMA50"] = calculate_EMA(df, "LastPrice", period_EMAL)
         while len(df) > 2*rows - 1:
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
@@ -341,16 +349,21 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     if len(df) < 99: # check function on compute_metrics for number (2*rows-1)
         return
 
+    if df["UnitTradeValue"].iloc[-1] < 10000000:
+        return 
     spread = df["MaxBid"] - df["MinAsk"]
     mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
     quantity_buy = buy_expenditure / mid_spread.iloc[-1]
 
     ### COMBINING SECTIONS
     current_orders = query_order(None, pair_or_coin)
-    if current_orders['Success'] == False:
-        pending_orders = []
-    else:
-        pending_orders = [order for order in current_orders["OrderMatched"] if order["Status"] == "PENDING"]
+    try: 
+        if current_orders['Success'] == False:
+            pending_orders = []
+        else:
+            pending_orders = [order for order in current_orders["OrderMatched"] if order["Status"] == "PENDING"]
+    except Exception as e:
+        logging.error(f"Failed to get current_orders: {current_orders}")
     # pending_orders should contain only 2 entries. For each ticker, [0] entry is BUY, [1] entry is sell.
     # This means that we would not have more than 1 limit order for BUY for any point in time. Similar for SELL.
 
@@ -373,25 +386,23 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
        
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
     # Current_position condition updated to current_position < 0.1 due to floating point error in the get_balance
-    if current_position <= 0.1 \
-        and df["DEMA_Short"].iloc[-1] > df["DEMA_Long"].iloc[-1] \
-        and df["RSI"].iloc[-1] < 20 \
-        and df["EMA12"].iloc[-1] > df["EMA50"].iloc[-1] \
+    if current_position <= 0.1 and calculate_signal(df, 3) > 0.7 \
         and curr_cash > buy_expenditure:
-        logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
+        logging.info(f"[BUY] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
 
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # BUY at market order, followed by immediately updating portfolio
             last_price = df["LastPrice"].iloc[-1]
             if last_price*quantity_buy_market >= coin_info['MiniOrder']:
-                logging.info(f"Sending BUY Order for {pair_or_coin} with quantity {quantity_buy_market}")
+                logging.info(f"[BUY] Sending Order for {pair_or_coin} with quantity {quantity_buy_market}")
                 order = place_order(pair_or_coin, "BUY", quantity_buy_market)
-                logging.info(f"Order info: {order}")
+                logging.info(f"[BUY] Order info: {order}")
                 try:
                     update_pfo(order["OrderDetail"]["Pair"])
+                    add_to_orders_and_pnl(order)
                 except:
-                    logging.error(order["ErrMsg"])
+                    logging.error(f"[BUY] Triggered buy at market: {order}")
                 
         else:
             # BUY at limit order
@@ -400,7 +411,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                 logging.info(f"[BUY] Pending Orders: {pending_orders}")
                 for order in pending_orders:
                     if abs(pending_orders[0]['Price'] - (ma20 - 1.5*atr)) / mid_spread > 0.05:
-                        logging.info(f"Cancelling order for {pair_or_coin}")
+                        logging.info(f"[BUY] Cancelling order for {pair_or_coin}")
                         cancel_order(order["OrderID"], pair_or_coin)
                         limit_price = ma20 - 1.5 * atr
                         if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
@@ -410,8 +421,9 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                                 order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
                                 try:
                                     add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                                    add_to_orders_and_pnl(order)
                                 except:
-                                    logging.error(order["ErrMsg"])
+                                    logging.error(f"[BUY] Error: {order}")
             else:
                 logging.info(f"[BUY] Not pending Orders: {pending_orders}")
                 limit_price = ma20 - 1.5 * atr
@@ -422,30 +434,27 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                         order = place_order(pair_or_coin, "BUY", quantity_buy_limit, price=limit_price, order_type="LIMIT")
                         try:
                             add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                            add_to_orders_and_pnl(order)
                         except:
-                            logging.error(order["ErrMsg"])
+                            logging.error(f"[BUY] Error: {order}")
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
-    elif current_position > 0.1 \
-        and df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1] \
-        and df["RSI"].iloc[-1] > 80 \
-        and df["EMA12"].iloc[-1] < df["EMA50"].iloc[-1]:
-        logging.info(f"Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
+    elif current_position > 0.1 and calculate_signal(df, 3) < 0.3:
+        logging.info(f"[SELL] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # SELL at market order. SELL will close entire position for simplicity
             last_price = df["LastPrice"].iloc[-1]
             if last_price*current_position >= coin_info['MiniOrder']:
-                logging.info(f"Sending SELL Order for {pair_or_coin} with quantity {current_position}")
+                logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
                 order = place_order(pair_or_coin, "SELL", current_position)
-                logging.info(f"Order info: {order}")
+                logging.info(f"[SELL] Order info: {order}")
                 try:
-                    quantity_buy = order["OrderDetail"]["Quantity"]
-                    price = order["OrderDetail"]["Price"]
                     update_pfo(order["OrderDetail"]["Pair"])
+                    add_to_orders_and_pnl(order)
                 except:
-                    logging.error(order["ErrMsg"])
+                    logging.error(f"[SELL] Error: {order}")
         else:
             if pending_orders:
                 logging.info(f"[SELL] Pending Orders: {pending_orders}")
@@ -460,8 +469,9 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                                 order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
                                 try:
                                     add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                                    add_to_orders_and_pnl(order)
                                 except:
-                                    logging.error(order["ErrMsg"])
+                                    logging.error(f"[SELL] Error: {order}")
             # else:
             #     limit_price = ma20 + 1.5 * atr
             #     if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
@@ -493,6 +503,30 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
         #         cancel_order(order_id=order['OrderID'])
         #         print(f"Cancelled pending {order['Side']} order {order['OrderID']} due to deviation/time")
 
+def calculate_signal(df, num_indicators):
+    signal = 0 
+    total_indicators = num_indicators
+    # Indicators
+    if df["DEMA_Short"].iloc[-1] < df["DEMA_Long"].iloc[-1] and df["DEMA_Short"].iloc[-2] > df["DEMA_Long"].iloc[-2]:
+        signal += 0
+    elif df["DEMA_Short"].iloc[-1] > df["DEMA_Long"].iloc[-1] and df["DEMA_Short"].iloc[-2] < df["DEMA_Long"].iloc[-2]:
+        signal += 1
+    else:
+        signal += 0.5
+    if df["RSI"].iloc[-1] > 80:
+        signal += 0
+    elif df["RSI"].iloc[-1] < 20:
+        signal += 1
+    else:
+        signal += 0.5
+    if df["EMA12"].iloc[-1] < df["EMA50"].iloc[-1] and df["EMA12"].iloc[-2] > df["EMA50"].iloc[-2]:
+        signal += 0
+    elif df["EMA12"].iloc[-1] > df["EMA50"].iloc[-1] and df["EMA12"].iloc[-2] < df["EMA50"].iloc[-2]:
+        signal += 1
+    else:
+        signal += 0.5
+    return round(signal / total_indicators, 2)
+
 def remove_pending_orders(orders):
     if orders["Success"] == False:
         return
@@ -510,11 +544,12 @@ def update_pfo(pair = None, csv_file = "./portfolio.csv"):
     all_coins = balance['SpotWallet']
     if pair:
         df.loc[df["Pair"] == pair.replace('/USD',''), "Quantity"] = all_coins[pair.replace('/USD','')]['Free']
-    for coin in all_coins:
-        curr_coin_bal = all_coins[coin]['Free']
-        if curr_coin_bal <= 0:
-            continue
-        df.loc[len(df)] = [coin, curr_coin_bal]
+    else:
+        for coin in all_coins:
+            curr_coin_bal = all_coins[coin]['Free']
+            if curr_coin_bal <= 0:
+                continue
+            df.loc[len(df)] = [coin, curr_coin_bal]
     df.to_csv(csv_file, index = False)
 
 def create_headers():
@@ -541,80 +576,6 @@ def create_headers():
             pass
     except FileNotFoundError:
         append_to_csv("./pnl.csv", pnl_headers)
-
-def add_to_pnl(order, init_price, PnL, csv_file = "./pnl.csv"):
-    df = pd.read_csv(csv_file)
-    new_row_value = [order["Pair"], order["Quantity"], init_price, order["Price"], order["FinishTimestamp"], PnL]
-    df.loc[len(df)] = new_row_value
-    df.to_csv(csv_file, index = False)
-
-    """
-    query_order("BNB/USD", pending_only=False) returns:
-    query_order returns:
-    {
-    "Success": true,
-    "ErrMsg": "",
-    "OrderMatched": [
-        {"Pair": "BNB/USD",
-            "OrderID": 2795709,
-            "Status": "FILLED",
-            "Role": "TAKER",
-            "ServerTimeUsage": 0.004961759,
-            "CreateTimestamp": 1774103089466,
-            "FinishTimestamp": 1774103089471,
-            "Side": "BUY",
-            "Type": "MARKET",
-            "StopType": "GTC",
-            "Price": 645.27,
-            "Quantity": 0.542,
-            "FilledQuantity": 0.542,
-            "FilledAverPrice": 645.27,
-            "CoinChange": 0.542,
-            "UnitChange": 349.73634,
-            "CommissionCoin": "USD",
-            "CommissionChargeValue": 0.349736,
-            "CommissionPercent": 0.001,
-            "OrderWalletType": "SPOT",
-            "OrderSource": "PUBLIC_API"},
-        {"Pair": "BNB/USD",
-            "OrderID": 2782035,
-            "Status": "FILLED",
-            "Role": "TAKER",
-            "ServerTimeUsage": 0.004498809,
-            "CreateTimestamp": 1774076845620,
-            "FinishTimestamp": 1774076845624,
-            "Side": "SELL",
-            "Type": "MARKET",
-            "StopType": "GTC",
-            "Price": 643,
-            "Quantity": 0.14,
-            "FilledQuantity": 0.14,
-            "FilledAverPrice": 643,
-            "CoinChange": 0.14,
-            "UnitChange": 90.02,
-            "CommissionCoin": "USD",
-            "CommissionChargeValue": 0.09002,
-            "CommissionPercent": 0.001,
-            "OrderWalletType": "SPOT",
-            "OrderSource": "PUBLIC_API"}
-        ]
-    }
-    """
-    # New implementation below (proposed)
-    # order is a query_order object as per the comment above
-    # remember to change the function create_headers() headers if we are using the below implementation for pnl folder
-    # df = pd.read_csv(csv_file)
-    # order_detail = order["OrderMatched"]
-    # if order_detail["Side"] == "BUY":
-    #     price_bought = order_detail["FilledAverPrice"] * order_detail["FilledQuantity"]
-    #     price_sold = 0
-    # elif order_detail["Side"] == "SELL":
-    #     price_bought = 0
-    #     price_sold = order_detail["FilledAverPrice"] * order_detail["FilledQuantity"]
-    # PnL = price_sold - price_bought
-    # new_row_value = [order_detail["OrderID"], order_detail["FinishTimestamp"], order_detail["Pair"], price_bought, price_sold, order_detail["Quantity"], PnL, order_detail["CommissionChargeValue"]]
-    # df.loc[len(df)] = new_row_value
-    # df.to_csv(csv_file, index = False)
     
 def add_pending_orders(order, csv_file = "./pending_orders.csv", drop = False):
     df = pd.read_csv(csv_file)
@@ -663,15 +624,18 @@ async def main():
         a. Also, ensure there are exactly 2*long_period - 1 rows in the CSV 
         b. In particular, add the latest data, followed by removing the earliest row, then compute the DEMA columns
      """
-    print(f"Started at {time.strftime('%X')}")
-    info = get_exchange_info()
-    ticker_list = list(info.get('TradePairs', {}).keys())
-    await asyncio.gather(
-        tickers_to_csv(ticker_list),     # Always keep getting exchange data
-        compute_metrics(ticker_list),    # Always recompute DEMA        
-        poll_for_trades(ticker_list)     # Check for trades
-    )
-    print(f"Finished at {time.strftime('%X')}")
+    try:
+        print(f"Started at {time.strftime('%X')}")
+        info = get_exchange_info()
+        ticker_list = list(info.get('TradePairs', {}).keys())
+        await asyncio.gather(
+            tickers_to_csv(ticker_list),     # Always keep getting exchange data
+            compute_metrics(ticker_list),    # Always recompute DEMA        
+            poll_for_trades(ticker_list)     # Check for trades
+        )
+        print(f"Finished at {time.strftime('%X')}")
+    except Exception as e:
+        logging.error(f"Error: {info}")
 
 def create_csvs(tickers):
     folder_path = "./ticker_csv/"
@@ -685,16 +649,52 @@ def create_csvs(tickers):
         except Exception as e:
             logging.error(f"Error processing {ticker}: {e}")
 
-def remove_files():
-    folder_path = './ticker_csv/'
-    csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
-
+def remove_csv_files(csv_path):
+    csv_files = glob.glob(os.path.join(csv_path, "*.csv"))
     for file_path in csv_files:
         try:
             os.remove(file_path)
             logging.info(f"Removed {file_path} on startup")
         except Exception as e:
             logging.error(f"Error removing {file_path}: {e}")
+    
+
+def add_to_orders_and_pnl(order, order_file = "./orders.csv", pnl_file = "./pnl.csv"):
+    order_info = order["OrderDetail"]
+    if order_info["Status"] != "FILLED":
+        logging.info(f"Order not added to orders and pnl csv due to status {order_info['Status']}")
+        return
+    order_info['Direction'] = 1 if order_info['Side'] == "BUY" else -1
+    order_info['MoneySpentOnTrade'] = order_info["Price"] * order_info["Quantity"] * order_info["Direction"] + order_info["CommissionChargeValue"]
+    logging.info(f"Money Spent on {order_info['Pair']} {order_info['Side']} Trade: {order_info['MoneySpentOnTrade']}")
+    order_df = pd.read_csv(order_file)
+    new_row = pd.DataFrame([order_info])
+    order_df = pd.concat([order_df, new_row], ignore_index = True)
+    order_df.to_csv(order_file, index = False)
+
+    pnl_df = pd.read_csv(pnl_file)
+    ticker = order_info['Pair']
+    if not pnl_df.loc[pnl_df['Pair'] == ticker, 'MoneySpentOnTrade'].empty:
+        pnl_df.loc[pnl_df['Pair'] == ticker, 'MoneySpentOnTrade'] += order_info['MoneySpentOnTrade']
+    else:
+        pnl_df.loc[len(pnl_df)] = [ticker, order_info['MoneySpentOnTrade']]
+    logging.info(f"Total Spent on {order_info['Pair']} = {pnl_df[pnl_df['Pair'] == ticker]['MoneySpentOnTrade'].iloc[0]}")
+    pnl_df.to_csv(pnl_file, index = False)
+
+def create_orders(order_list, csv_file = "./orders.csv"):
+    df = pd.json_normalize(order_list['OrderMatched'])
+    df["Direction"] = df.apply(lambda x: 1 if x["Side"] == "BUY" else -1, axis = 1)
+    df["MoneySpentOnTrade"] = df["Price"] * df["Quantity"] * df["Direction"] + df["CommissionChargeValue"]
+    df.to_csv(csv_file, index=False)
+
+def create_pnl():
+    pnl = 0
+    df = pd.read_csv("./orders.csv")
+    summed_df = df.groupby(["Pair"])["MoneySpentOnTrade"].sum()
+    for val in summed_df:
+        pnl -= val
+    logging.info(f"Total PnL on starting: {pnl}")
+    summed_df.to_csv("./pnl.csv")
 
 # ------------------------------
 # Quick Demo Section
@@ -703,7 +703,8 @@ if __name__ == "__main__":
     all_orders = query_order()
 
     logging.info("--- Remove all temporary data ---")
-    remove_files()
+    remove_csv_files("./ticker_csv/")
+    remove_csv_files("./")
     
     logging.info("--- Checking Current Balance ---")
     balance = get_balance()
@@ -722,6 +723,12 @@ if __name__ == "__main__":
 
     logging.info("--- Updating Portfolio CSV ---")
     update_pfo()
+
+    logging.info("--- Creating Orders CSV ---")
+    create_orders(all_orders)
+
+    logging.info("--- Creating PnL CSV ---")
+    create_pnl()
 
     logging.info("--- Remove all pending trades ---")
     remove_pending_orders(all_orders)
