@@ -440,7 +440,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
-    elif current_position > 0.1:
+    elif current_position > 0:
         if calculate_signal(df, 3) < 0.3:
             logging.info(f"[SELL] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
             # For now, do market order if spread is < 0.001
@@ -456,7 +456,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                         update_pfo(order["OrderDetail"]["Pair"])
                         add_to_orders_and_pnl(order)
                     except:
-                        logging.error(f"[SELL] Error: {order}")
+                        logging.error(f"[SELL] Error: {order}. Risk management sell order did not hit percentages. Continue to hold.")
             else:
                 if pending_orders:
                     logging.info(f"[SELL] Pending Orders: {pending_orders}")
@@ -496,7 +496,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                         update_pfo(order["OrderDetail"]["Pair"])
                         add_to_orders_and_pnl(order)
                     except:
-                        logging.error(f"[SELL] Error: {order}")
+                        logging.error(f"[SELL] Error: {order}. Risk management sell order did not hit percentages. Continue to hold.")
 
     else:
         pass
@@ -549,7 +549,7 @@ def risk_management(pair_or_coin, curr_position, curr_price, take_profit_pct, st
     mask = (orders_df["Pair"] == pair_or_coin) & (orders_df["Side"] == "BUY")
     price_bought = orders_df[mask]["FilledAverPrice"].iloc[-1]
     
-    if take_profit_pct * price_bought >= curr_price or stop_loss_pct * price_bought <= curr_price:
+    if curr_price >= (1+take_profit_pct) * price_bought or curr_price <= (1+stop_loss_pct) * price_bought:
         order = place_order(pair_or_coin, "SELL", curr_position)
         return order
 
