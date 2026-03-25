@@ -576,6 +576,8 @@ def create_headers():
             pass
     except FileNotFoundError:
         append_to_csv("./pnl.csv", pnl_headers)
+    if not os.path.isfile("./orders.csv"):
+        open("./orders.csv", 'a').close()
     
 def add_pending_orders(order, csv_file = "./pending_orders.csv", drop = False):
     df = pd.read_csv(csv_file)
@@ -685,11 +687,28 @@ def add_to_orders_and_pnl(order, order_file = "./orders.csv", pnl_file = "./pnl.
     logging.info(f"Total Spent on {order_info['Pair']} = {pnl_df[pnl_df['Pair'] == ticker]['MoneySpentOnTrade'].iloc[0]}")
     pnl_df.to_csv(pnl_file, index = False)
 
-def create_orders(order_list, csv_file = "./orders.csv"):
-    df = pd.json_normalize(order_list['OrderMatched'])
-    df["Direction"] = df.apply(lambda x: 1 if x["Side"] == "BUY" else -1, axis = 1)
-    df["MoneySpentOnTrade"] = df["Price"] * df["Quantity"] * df["Direction"] + df["CommissionChargeValue"]
-    df.to_csv(csv_file, index=False)
+def create_orders(balance_wallet, csv_file = "./orders.csv"):
+    for pair in balance_wallet:
+        if pair == "USD":
+            continue
+        try:
+            orders = query_order(None, f"{pair}/USD")
+            if not os.path.getsize(csv_file):
+                df = pd.json_normalize(orders['OrderMatched'])
+                df["Direction"] = df.apply(lambda x: 1 if x["Side"] == "BUY" else -1, axis = 1)
+                df["MoneySpentOnTrade"] = df["Price"] * df["Quantity"] * df["Direction"] + df["CommissionChargeValue"]
+                df.to_csv(csv_file, index = False)
+            else:
+                init_df = pd.read_csv(csv_file)
+                df = pd.json_normalize(orders['OrderMatched'])
+                df["Direction"] = df.apply(lambda x: 1 if x["Side"] == "BUY" else -1, axis = 1)
+                df["MoneySpentOnTrade"] = df["Price"] * df["Quantity"] * df["Direction"] + df["CommissionChargeValue"]
+                result = pd.concat([init_df, df], ignore_index = True)
+                result.to_csv(csv_file, index = False)
+        except:
+            logging.error(f"Unable to query {pair}: {orders}")
+            pass
+    logging.info(f"--- Orders.csv successfully created ---")
 
 def create_pnl():
     pnl = 0
@@ -729,7 +748,7 @@ if __name__ == "__main__":
     update_pfo()
 
     logging.info("--- Creating Orders CSV ---")
-    create_orders(all_orders)
+    create_orders(balance['SpotWallet'])
 
     logging.info("--- Creating PnL CSV ---")
     create_pnl()
