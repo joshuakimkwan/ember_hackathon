@@ -440,46 +440,63 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
-    elif current_position > 0.1 and calculate_signal(df, 3) < 0.3:
-        logging.info(f"[SELL] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
-        # For now, do market order if spread is < 0.001
-        if spread.iloc[-1] < 0.001:
-            # SELL at market order. SELL will close entire position for simplicity
-            last_price = df["LastPrice"].iloc[-1]
-            if last_price*current_position >= coin_info['MiniOrder']:
-                logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
-                order = place_order(pair_or_coin, "SELL", current_position)
-                logging.info(f"[SELL] Order info: {order}")
-                try:
-                    update_pfo(order["OrderDetail"]["Pair"])
-                    add_to_orders_and_pnl(order)
-                except:
-                    logging.error(f"[SELL] Error: {order}")
-        else:
-            if pending_orders:
-                logging.info(f"[SELL] Pending Orders: {pending_orders}")
-                for order in pending_orders:
-                    if abs(pending_orders[0]['Price'] - (ma20 + 1.5*atr)) / mid_spread > 0.05:
-                        cancel_order(order["OrderID"], pair_or_coin)
-                        limit_price = ma20 + 1.5 * atr
-                        if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
-                            limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
-                            # 挂单
-                            if limit_price*current_position >= coin_info['MiniOrder']:
-                                order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
-                                try:
-                                    add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
-                                    add_to_orders_and_pnl(order)
-                                except:
-                                    logging.error(f"[SELL] Error: {order}")
-            # else:
-            #     limit_price = ma20 + 1.5 * atr
-            #     if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
-            #         limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
-            #         # 挂单
-            #         order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
-            #         add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
-
+    elif current_position > 0.1:
+        if calculate_signal(df, 3) < 0.3:
+            logging.info(f"[SELL] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
+            # For now, do market order if spread is < 0.001
+            if spread.iloc[-1] < 0.001:
+                # SELL at market order. SELL will close entire position for simplicity
+                last_price = df["LastPrice"].iloc[-1]
+                if last_price*current_position >= coin_info['MiniOrder']:
+                    order = risk_management(pair_or_coin, current_position, last_price, 0.25/100, -0.5/100)
+                    logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
+                    # order = place_order(pair_or_coin, "SELL", current_position)
+                    # logging.info(f"[SELL] Order info: {order}")
+                    try:
+                        update_pfo(order["OrderDetail"]["Pair"])
+                        add_to_orders_and_pnl(order)
+                    except:
+                        logging.error(f"[SELL] Error: {order}")
+            else:
+                if pending_orders:
+                    logging.info(f"[SELL] Pending Orders: {pending_orders}")
+                    for order in pending_orders:
+                        if abs(pending_orders[0]['Price'] - (ma20 + 1.5*atr)) / mid_spread > 0.05:
+                            cancel_order(order["OrderID"], pair_or_coin)
+                            limit_price = ma20 + 1.5 * atr
+                            if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
+                                limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
+                                # 挂单
+                                if limit_price*current_position >= coin_info['MiniOrder']:
+                                    order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
+                                    try:
+                                        add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+                                        add_to_orders_and_pnl(order)
+                                    except:
+                                        logging.error(f"[SELL] Error: {order}")
+                # else:
+                #     limit_price = ma20 + 1.5 * atr
+                #     if abs(limit_price - mid_spread)/mid_spread < 0.10:  # 不偏离现价过多
+                #         limit_price *= (1 + np.random.uniform(-0.001, 0.001))  # 避免整数关口
+                #         # 挂单
+                #         order = place_order(pair_or_coin, "SELL", current_position, price=limit_price, order_type="LIMIT")
+                #         add_pending_orders(order["OrderDetail"], "./pending_orders.csv")
+        elif calculate_signal(df, 3) >= 0.3:
+            logging.info(f"[SELL] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
+            # For now, do market order if spread is < 0.001
+            if spread.iloc[-1] < 0.001:
+                # SELL at market order. SELL will close entire position for simplicity
+                last_price = df["LastPrice"].iloc[-1]
+                if last_price*current_position >= coin_info['MiniOrder']:
+                    order = risk_management(pair_or_coin, current_position, last_price, 0.5/100, -0.5/100)
+                    logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
+                    # order = place_order(pair_or_coin, "SELL", current_position)
+                    # logging.info(f"[SELL] Order info: {order}")
+                    try:
+                        update_pfo(order["OrderDetail"]["Pair"])
+                        add_to_orders_and_pnl(order)
+                    except:
+                        logging.error(f"[SELL] Error: {order}")
 
     else:
         pass
@@ -526,6 +543,15 @@ def calculate_signal(df, num_indicators):
     else:
         signal += 0.5
     return round(signal / total_indicators, 2)
+
+def risk_management(pair_or_coin, curr_position, curr_price, take_profit_pct, stop_loss_pct, order_file = "./orders.csv"):
+    orders_df = pd.read_csv(order_file)
+    mask = (orders_df["Pair"] == pair_or_coin) & (orders_df["Side"] == "BUY")
+    price_bought = orders_df[mask]["FilledAverPrice"].iloc[-1]
+    
+    if take_profit_pct * price_bought >= curr_price or stop_loss_pct * price_bought <= curr_price:
+        order = place_order(pair_or_coin, "SELL", curr_position)
+        return order
 
 def remove_pending_orders(orders):
     if orders["Success"] == False:
