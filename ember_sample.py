@@ -321,7 +321,7 @@ async def compute_metrics(ticker_list, short=10, long=30):
     period_DL = 30
     period_MA = 20
     period_ATR = 20
-    period_RSI = 7
+    period_RSI = 14
     period_EMAS = 12
     period_EMAL = 50
     
@@ -330,8 +330,8 @@ async def compute_metrics(ticker_list, short=10, long=30):
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
-        rows = max(period_DS, period_DL, period_MA, period_ATR, period_RSI, period_EMAS, period_EMAL)
-        if len(df) >= 2 * rows - 1:
+        rows = max(period_DS, 2*period_DL - 1, period_MA, period_ATR, period_RSI, period_EMAS, period_EMAL)
+        if len(df) >= rows:
             df["DEMA_Short"] = calculate_double_EMA(df, period_DS, "LastPrice")
             df["DEMA_Long"] = calculate_double_EMA(df, period_DL, "LastPrice")
             df["MA"] = calculate_MA(df, period_MA, "LastPrice")
@@ -339,14 +339,14 @@ async def compute_metrics(ticker_list, short=10, long=30):
             df["RSI"] = calculate_RSI(df, "LastPrice", period_RSI) # RSI<20 BUY, RSI>80 SELL
             df["EMA12"] = calculate_EMA(df, "LastPrice", period_EMAS) # EMA12>EMA50 BUY, else SELL
             df["EMA50"] = calculate_EMA(df, "LastPrice", period_EMAL)
-        while len(df) > 2*rows - 1:
+        while len(df) > rows:
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
 
 def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     # TODO Iterate through CSV. (Added: CSV should be maintained at (2*long_time_period-1) rows)
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
-    if len(df) < 99: # check function on compute_metrics for number (2*rows-1)
+    if len(df) < 59: # check function on compute_metrics for number, rows
         return
 
     if df["UnitTradeValue"].iloc[-1] < 10000000:
