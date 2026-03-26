@@ -282,7 +282,7 @@ def calculate_ATR(df, time_period, column):
     ATR = df[column].diff().abs().rolling(window=time_period).mean()
     return ATR
 
-def calculate_ATR_stdev(df, time_period, column):
+def calculate_ATR_stdev(df, column, time_period):
     r_t = (df[column] / df[column].shift(1)) - 1
     ATR = r_t.rolling(window=time_period).std()
     return ATR
@@ -348,8 +348,8 @@ async def compute_metrics(ticker_list, short=10, long=30):
             df["EMA12"] = calculate_EMA(df, "LastPrice", period_EMAS) # EMA12>EMA50 BUY, else SELL
             df["EMA50"] = calculate_EMA(df, "LastPrice", period_EMAL)
             df["ATRstdev"] = calculate_ATR_stdev(df, "LastPrice", period_ATR_stdev)
-            df["DynamicStopLoss"] = (-1) * max(StopLoss_factor * df["ATRstdev"],0.25/100)
-            df["DynamicTakeProfit"] = max(TakeProfit_factor * df["ATRstdev"],0.25/100)
+            df["DynamicStopLoss"] = StopLoss_factor * df["ATRstdev"]
+            df["DynamicTakeProfit"] = TakeProfit_factor * df["ATRstdev"]
         while len(df) > rows:
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
@@ -459,7 +459,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                 # SELL at market order. SELL will close entire position for simplicity
                 # last_price = df["LastPrice"].iloc[-1]
                 # if last_price*current_position >= coin_info['MiniOrder']:
-                order = risk_management(pair_or_coin, current_position, last_price, df["DynamicTakeProfit"].iloc[-1], df["DynamicStopLoss"].iloc[-1])
+                order = risk_management(pair_or_coin, current_position, last_price, max(df["DynamicTakeProfit"].iloc[-1],0.25/100), (-1)*max(df["DynamicStopLoss"].iloc[-1],0.25/100))
                 logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
                 # order = place_order(pair_or_coin, "SELL", current_position)
                 # logging.info(f"[SELL] Order info: {order}")
@@ -499,7 +499,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                 # SELL at market order. SELL will close entire position for simplicity
                 last_price = df["LastPrice"].iloc[-1]
                 if last_price*current_position >= coin_info['MiniOrder']:
-                    order = risk_management(pair_or_coin, current_position, last_price, df["DynamicTakeProfit"].iloc[-1], df["DynamicStopLoss"].iloc[-1])
+                    order = risk_management(pair_or_coin, current_position, last_price, max(df["DynamicTakeProfit"].iloc[-1],0.25/100), (-1)*max(df["DynamicStopLoss"].iloc[-1],0.25/100))
                     logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
                     # order = place_order(pair_or_coin, "SELL", current_position)
                     # logging.info(f"[SELL] Order info: {order}")
