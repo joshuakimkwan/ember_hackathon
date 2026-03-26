@@ -282,6 +282,11 @@ def calculate_ATR(df, time_period, column):
     ATR = df[column].diff().abs().rolling(window=time_period).mean()
     return ATR
 
+def calculate_ATR_stdev(df, time_period, column):
+    r_t = (df[column] / df[column].shift(1)) - 1
+    ATR = r_t.rolling(window=time_period).std()
+    return ATR
+
 def calculate_MA20(df, column, time_period=20):
     MA = df[column].rolling(window=time_period, min_periods=1).mean()
     return MA
@@ -324,13 +329,16 @@ async def compute_metrics(ticker_list, short=10, long=30):
     period_RSI = 14
     period_EMAS = 12
     period_EMAL = 50
-    
+    period_ATR_stdev = 14
+    StopLoss_factor = 3
+    TakeProfit_factor = 3.5
+
     for ticker in ticker_list: 
         path = f"./ticker_csv/{ticker.replace('/', '_')}" + ".csv"
         if os.path.getsize(path) == 0:
             continue
         df = pd.read_csv(path)
-        rows = max(period_DS, 2*period_DL - 1, period_MA, period_ATR, period_RSI, period_EMAS, period_EMAL)
+        rows = max(period_DS, 2*period_DL - 1, period_MA, period_ATR, period_RSI, period_EMAS, period_EMAL, period_ATR_stdev)
         if len(df) >= rows:
             df["DEMA_Short"] = calculate_double_EMA(df, period_DS, "LastPrice")
             df["DEMA_Long"] = calculate_double_EMA(df, period_DL, "LastPrice")
@@ -339,6 +347,9 @@ async def compute_metrics(ticker_list, short=10, long=30):
             df["RSI"] = calculate_RSI(df, "LastPrice", period_RSI) # RSI<20 BUY, RSI>80 SELL
             df["EMA12"] = calculate_EMA(df, "LastPrice", period_EMAS) # EMA12>EMA50 BUY, else SELL
             df["EMA50"] = calculate_EMA(df, "LastPrice", period_EMAL)
+            df["ATRstdev"] = calculate_ATR_stdev(df, "LastPrice", period_ATR_stdev)
+            df["DynamicStopLoss"] = (-1) * max(StopLoss_factor * df["ATRstdev"],0.25/100)
+            df["DynamicTakeProfit"] = max(TakeProfit_factor * df["ATRstdev"],0.25/100)
         while len(df) > rows:
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
@@ -373,7 +384,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     coin_info = info['TradePairs'][pair_or_coin]
 
     quantity_buy_limit = round(quantity_buy * 0.7, coin_info['AmountPrecision'])  # 70% for limit order
-    quantity_buy_market = round(quantity_buy * 0.3, coin_info['AmountPrecision'])  # 30% for market order
+    quantity_buy_market = round(quantity_buy, coin_info['AmountPrecision'])  # 30% for market order
 
     balance = get_balance()
     try:
@@ -383,26 +394,26 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     except:
         logging.error(f"Failed to get balance: {balance}")
         return None
-       
+    last_price = df["LastPrice"].iloc[-1]
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
     # Current_position condition updated to current_position < 0.1 due to floating point error in the get_balance
-    if current_position <= 0.1 and calculate_signal(df, 3) > 0.7 \
+    if last_price*current_position < coin_info['MiniOrder'] and calculate_signal(df, 3) > 0.7 \
         and curr_cash > buy_expenditure:
         logging.info(f"[BUY] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
 
         # For now, do market order if spread is < 0.001
         if spread.iloc[-1] < 0.001:
             # BUY at market order, followed by immediately updating portfolio
-            last_price = df["LastPrice"].iloc[-1]
-            if last_price*quantity_buy_market >= coin_info['MiniOrder']:
-                logging.info(f"[BUY] Sending Order for {pair_or_coin} with quantity {quantity_buy_market}")
-                order = place_order(pair_or_coin, "BUY", quantity_buy_market)
-                logging.info(f"[BUY] Order info: {order}")
-                try:
-                    update_pfo(order["OrderDetail"]["Pair"])
-                    add_to_orders_and_pnl(order)
-                except:
-                    logging.error(f"[BUY] Triggered buy at market: {order}")
+            # last_price = df["LastPrice"].iloc[-1]
+            # if last_price*quantity_buy_market >= coin_info['MiniOrder']:
+            logging.info(f"[BUY] Sending Order for {pair_or_coin} with quantity {quantity_buy_market}")
+            order = place_order(pair_or_coin, "BUY", quantity_buy_market)
+            logging.info(f"[BUY] Order info: {order}")
+            try:
+                update_pfo(order["OrderDetail"]["Pair"])
+                add_to_orders_and_pnl(order)
+            except:
+                logging.error(f"[BUY] Triggered buy at market: {order}")
                 
         else:
             # BUY at limit order
@@ -440,23 +451,23 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
 
     # 1. The short and long DEMA cross each other                           :   df["Short_DEMA"][-1] < df["Long_DEMA"][-1]
     # 2. Currently holding a positive quantity of stock in our portfolio    :   current_position > 0               : 
-    elif current_position > 0:
+    elif last_price*current_position >= coin_info['MiniOrder']:
         if calculate_signal(df, 3) < 0.3:
             logging.info(f"[SELL] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}")
             # For now, do market order if spread is < 0.001
             if spread.iloc[-1] < 0.001:
                 # SELL at market order. SELL will close entire position for simplicity
-                last_price = df["LastPrice"].iloc[-1]
-                if last_price*current_position >= coin_info['MiniOrder']:
-                    order = risk_management(pair_or_coin, current_position, last_price, 0.25/100, -0.5/100)
-                    logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
-                    # order = place_order(pair_or_coin, "SELL", current_position)
-                    # logging.info(f"[SELL] Order info: {order}")
-                    try:
-                        update_pfo(order["OrderDetail"]["Pair"])
-                        add_to_orders_and_pnl(order)
-                    except:
-                        logging.error(f"[SELL] Error: {order}. Risk management sell order did not hit percentages. Continue to hold.")
+                # last_price = df["LastPrice"].iloc[-1]
+                # if last_price*current_position >= coin_info['MiniOrder']:
+                order = risk_management(pair_or_coin, current_position, last_price, df["DynamicTakeProfit"].iloc[-1], df["DynamicStopLoss"].iloc[-1])
+                logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
+                # order = place_order(pair_or_coin, "SELL", current_position)
+                # logging.info(f"[SELL] Order info: {order}")
+                try:
+                    update_pfo(order["OrderDetail"]["Pair"])
+                    add_to_orders_and_pnl(order)
+                except:
+                    logging.error(f"[SELL] Error: {order}. Risk management sell order did not hit percentages. Continue to hold.")
             else:
                 if pending_orders:
                     logging.info(f"[SELL] Pending Orders: {pending_orders}")
@@ -488,7 +499,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
                 # SELL at market order. SELL will close entire position for simplicity
                 last_price = df["LastPrice"].iloc[-1]
                 if last_price*current_position >= coin_info['MiniOrder']:
-                    order = risk_management(pair_or_coin, current_position, last_price, 0.5/100, -0.5/100)
+                    order = risk_management(pair_or_coin, current_position, last_price, df["DynamicTakeProfit"].iloc[-1], df["DynamicStopLoss"].iloc[-1])
                     logging.info(f"[SELL] Sending Order for {pair_or_coin} with quantity {current_position}")
                     # order = place_order(pair_or_coin, "SELL", current_position)
                     # logging.info(f"[SELL] Order info: {order}")
@@ -548,7 +559,7 @@ def risk_management(pair_or_coin, curr_position, curr_price, take_profit_pct, st
     orders_df = pd.read_csv(order_file)
     mask = (orders_df["Pair"] == pair_or_coin) & (orders_df["Side"] == "BUY")
     price_bought = orders_df[mask]["FilledAverPrice"].iloc[-1]
-    
+    logging.info(f"[RISK MANAGEMENT] {pair_or_coin} current price is {curr_price}, bought at {price_bought}")
     if curr_price >= (1+take_profit_pct) * price_bought or curr_price <= (1+stop_loss_pct) * price_bought:
         order = place_order(pair_or_coin, "SELL", curr_position)
         return order
