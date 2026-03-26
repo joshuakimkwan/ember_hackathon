@@ -723,12 +723,14 @@ def create_orders(balance_wallet, csv_file = "./orders.csv"):
                 df = pd.json_normalize(orders['OrderMatched'])
                 df["Direction"] = df.apply(lambda x: 1 if x["Side"] == "BUY" else -1, axis = 1)
                 df["MoneySpentOnTrade"] = df["Price"] * df["Quantity"] * df["Direction"] + df["CommissionChargeValue"]
+                df = df[::-1]
                 df.to_csv(csv_file, index = False)
             else:
                 init_df = pd.read_csv(csv_file)
                 df = pd.json_normalize(orders['OrderMatched'])
                 df["Direction"] = df.apply(lambda x: 1 if x["Side"] == "BUY" else -1, axis = 1)
                 df["MoneySpentOnTrade"] = df["Price"] * df["Quantity"] * df["Direction"] + df["CommissionChargeValue"]
+                df = df[::-1]
                 result = pd.concat([init_df, df], ignore_index = True)
                 result.to_csv(csv_file, index = False)
         except:
