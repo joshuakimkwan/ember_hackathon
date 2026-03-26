@@ -367,14 +367,11 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     quantity_buy = buy_expenditure / mid_spread.iloc[-1]
 
     ### COMBINING SECTIONS
-    current_orders = query_order(None, pair_or_coin)
     try: 
-        if current_orders['Success'] == False:
-            pending_orders = []
-        else:
-            pending_orders = [order for order in current_orders["OrderMatched"] if order["Status"] == "PENDING"]
+        order = update_limit_order(df, pair_or_coin, price_bought, upper_limit, stoplossfactor)
+        update_pending_order_csv(...)
     except Exception as e:
-        logging.error(f"Failed to get current_orders: {current_orders}")
+        logging.error(f"{pair_or_coin} limit order was not changed. Current price is {curr_price}.")
     # pending_orders should contain only 2 entries. For each ticker, [0] entry is BUY, [1] entry is sell.
     # This means that we would not have more than 1 limit order for BUY for any point in time. Similar for SELL.
 
@@ -408,6 +405,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
             # if last_price*quantity_buy_market >= coin_info['MiniOrder']:
             logging.info(f"[BUY] Sending Order for {pair_or_coin} with quantity {quantity_buy_market}")
             order = place_order(pair_or_coin, "BUY", quantity_buy_market)
+            # Limit order
             logging.info(f"[BUY] Order info: {order}")
             try:
                 update_pfo(order["OrderDetail"]["Pair"])
@@ -530,6 +528,23 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
         #     if price_deviation > 0.05 or order_age > max_pending_duration:
         #         cancel_order(order_id=order['OrderID'])
         #         print(f"Cancelled pending {order['Side']} order {order['OrderID']} due to deviation/time")
+
+def update_limit_order(df, pair_or_coin, price_bought, upper_limit, stoplossfactor):
+    """
+    1. Check limit orders currently for that pair or coin
+    2. Check current price of stock
+    3. If current price of stock goes up by x%, cancel previous limit order. Update limit stop loss order to curr_price * 0.998
+    4. Place limit order
+    """
+    pending_orders = query_order(None, pair_or_coin)
+    curr_price = df["LastPrice"]
+    for order in pending_orders:
+        if order["Status"] == "PENDING" and curr_price >= price_bought * upper_limit: # There should only be one PENDING order at any point in time for each coin
+            orderID = order["OrderID"]
+            cancel_order(orderID, pair_or_coin)
+            new_price = curr_price * stoplossfactor
+            order = place_order(pair_or_coin, "SELL", new_price, "LIMIT")
+    return order
 
 def calculate_signal(df, num_indicators):
     signal = 0 
