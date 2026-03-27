@@ -364,31 +364,52 @@ def trailing_stop_loss(pair, quantity, price, order_id = None, csv_file = './pen
         sl_factor = 1 - 0.006 + 2 * commission_rate
         tp_factor = 1 + 0.012 + 2 * commission_rate
     stop_loss_price = round(sl_factor * price, info['TradePairs'][pair]['PricePrecision'])
-    curr_price = df.loc[df["Pair"] == pair, "PriceBought"]
-    if not curr_price.empty:
-        tp_price = df.loc[df["Pair"] == pair, "TPPrice"]
+    curr_price = df.loc[df["Pair"] == pair, "PriceBought"] # Price bought
+    if not curr_price.empty: # If we are holding the position
+        tp_price = df.loc[df["Pair"] == pair, "TPPrice"] # TODO COin info
         sl_price = df.loc[df["Pair"] == pair, "SLPrice"]
-        market_pendingorders = query_order(None, pair, True)['OrderMatched']
+        market_pendingorders = query_order(None, pair, True)['OrderMatched'] # Gets the pending orders
         # If the current price drops below stop loss. 
         # Market sell, and cancel all pending orders. 
         if price < sl_price:
-            stop_loss_order = place_order(pair, 'SELL', quantity)
+            stop_loss_order = place_order(pair, 'SELL', quantity) # mkt sell, stop loss triggered
             add_to_orders_and_pnl(stop_loss_order)
             update_pfo(pair)
             for order in market_pendingorders:
-                cancel_order(order['OrderID'], pair)
+                cancel_order(order['OrderID'], pair) # Cancel limit order
+                df = df.drop(df[df['OrderID'] == order['OrderID']].index) # Remove from pending orders csv
         # If we have pending orders.
         # Check if the order has the correct TP Price. If not, cancel and recreate
         if market_pendingorders:
             recreate_flag = False
-            for order in market_pendingorders:
+            for order in market_pendingorders: # There should only be at most 1 limit sell at any point in time
                 if order['Price'] != tp_price:
                     recreate_flag = True
                     cancel_order(order['OrderID'], pair)
+                    try:
+                        if df["OrderID"] == order["OrderID"]:
+                            df = df.drop(df[df['OrderID'] == order['OrderID']].index)
+                            logging.info(f"Removed stale limit sell order from pending orders csv.")
+                    except:
+                        logging.info(f"Pending orders csv did not contain limit sell order.")
             if recreate_flag:
                 new_sell_limit = place_order(pair, 'SELL', quantity, tp_price)
                 logging.info(f"Canceled {order['OrderID']} due to stale price.")
                 logging.info(f"[LIMIT SELL] New order: {new_sell_limit}")
+                # Update pending orders csv
+                df[len(df)] = [pair, new_sell_limit["OrderID"], curr_price, sl_price, tp_price, new_sell_limit['OrderDetail']['Quantity'], "PENDING", "SELL", "LIMIT"]
+                logging.info(f"[LIMIT SELL] Updated pending orders: {df[len(df)]}")
+        
+        # Check if limit sell order was triggered
+        filled_orders = query_order(None, pair, None)["OrderMatched"]
+        logging.info(f"Checking if limit sell order was triggered...")
+        for order in filled_orders:
+            mask = (df["Pair"] == pair) & (df["Status"] == "PENDING")
+            # TODO try except belows
+            if order["Status"] == "FILLED" and df[mask]["OrderID"] == order["OrderID"]:
+                df = df.drop(df[df['OrderID'] == order['OrderID']].index) # Remove from pending orders csv
+                add_to_orders_and_pnl(order)
+                logging.info(f"[LIMIT SELL] Limit sell order triggered. Added order to pnl csv: {order}.")
     else:
         if order_id:
             take_profit_price = round(tp_factor * price, info['TradePairs'][pair]['PricePrecision'])
