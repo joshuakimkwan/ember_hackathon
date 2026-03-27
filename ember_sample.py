@@ -354,70 +354,79 @@ async def compute_metrics(ticker_list, short=10, long=30):
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
 
-def trailing_stop_loss(pair, quantity, price, order_id = None, csv_file = './pending_orders.csv'):
+def trailing_stop_loss(pair_usd, quantity, price, order_id = None, csv_file = './pending_orders.csv'):
     df = pd.read_csv(csv_file)
-    commission_rate = 0.001
-    if price < 0.001:
-        sl_factor = 1 - 0.01 + 2 * commission_rate
-        tp_factor = 1 + 0.012 + 2 * commission_rate
-    else:
-        sl_factor = 1 - 0.006 + 2 * commission_rate
-        tp_factor = 1 + 0.012 + 2 * commission_rate
-    stop_loss_price = round(sl_factor * price, info['TradePairs'][pair]['PricePrecision'])
-    curr_price = df.loc[df["Pair"] == pair, "PriceBought"] # Price bought
-    if not curr_price.empty: # If we are holding the position
-        tp_price = df.loc[df["Pair"] == pair, "TPPrice"] # TODO COin info
-        sl_price = df.loc[df["Pair"] == pair, "SLPrice"]
-        market_pendingorders = query_order(None, pair, True)['OrderMatched'] # Gets the pending orders
-        # If the current price drops below stop loss. 
-        # Market sell, and cancel all pending orders. 
-        if price < sl_price:
-            stop_loss_order = place_order(pair, 'SELL', quantity) # mkt sell, stop loss triggered
-            add_to_orders_and_pnl(stop_loss_order)
-            update_pfo(pair)
-            for order in market_pendingorders:
-                cancel_order(order['OrderID'], pair) # Cancel limit order
-                df = df.drop(df[df['OrderID'] == order['OrderID']].index) # Remove from pending orders csv
-        # If we have pending orders.
-        # Check if the order has the correct TP Price. If not, cancel and recreate
-        if market_pendingorders:
+    pair = pair_usd.replace('/USD','')
+    curr_buy = df.loc[(df["Pair"] == pair) & (df["Type"] == "MARKET")] 
+    # If we are holding a buy position
+    if not curr_buy.empty: 
+        tp_price = df.loc[(df["Pair"] == pair) & (df["Side"] == "BUY")]["TPPrice"].iloc[0] 
+        sl_price = df.loc[(df["Pair"] == pair) & (df["Side"] == "BUY")]["SLPrice"].iloc[0]
+        get_orders = query_order(None, pair_usd, None)
+        if get_orders['Success'] == True:
+            market_pendingorders = list(filter(lambda x: x['Status'] == 'PENDING', get_orders['OrderMatched']))
+        else:
+            market_pendingorders = []
+        # If there are no pending orders, we create our TP Order
+        if market_pendingorders == []:
+            new_sell_limit = place_order(pair_usd, 'SELL', quantity, tp_price)
+            add_to_pending_orders(new_sell_limit, pair)
+            logging.info(f"[LIMIT SELL] Created {new_sell_limit}")
+        # There is a pending order
+        elif market_pendingorders:
             recreate_flag = False
-            for order in market_pendingorders: # There should only be at most 1 limit sell at any point in time
+            # Check if the order has the correct TP Price. If not, cancel and recreate
+            for order in market_pendingorders: 
+                logging.info(f"Pending order for {pair}: {order}")
                 if order['Price'] != tp_price:
                     recreate_flag = True
                     cancel_order(order['OrderID'], pair)
-                    try:
-                        if df["OrderID"] == order["OrderID"]:
-                            df = df.drop(df[df['OrderID'] == order['OrderID']].index)
-                            logging.info(f"Removed stale limit sell order from pending orders csv.")
-                    except:
-                        logging.info(f"Pending orders csv did not contain limit sell order.")
+                    if not df.loc[df['OrderID'] == order['OrderID']].empty:
+                        df = df.drop(df[df['OrderID'] == order['OrderID']].index)
+                        df.to_csv(csv_file, index = False)
+                        logging.info(f"Removed stale limit sell order {order['OrderID']} from pending orders csv.")
             if recreate_flag:
-                new_sell_limit = place_order(pair, 'SELL', quantity, tp_price)
+                new_sell_limit = place_order(pair_usd, 'SELL', quantity, tp_price)
                 logging.info(f"Canceled {order['OrderID']} due to stale price.")
                 logging.info(f"[LIMIT SELL] New order: {new_sell_limit}")
-                # Update pending orders csv
-                df[len(df)] = [pair, new_sell_limit["OrderID"], curr_price, sl_price, tp_price, new_sell_limit['OrderDetail']['Quantity'], "PENDING", "SELL", "LIMIT"]
-                logging.info(f"[LIMIT SELL] Updated pending orders: {df[len(df)]}")
+                add_to_pending_orders(new_sell_limit, pair)
+        # At this point, there is only one PENDING SELL LIMIT Order. 
+        # If the current price drops below stop loss - Cancel all pending orders, then market sell. 
+        logging.info(f"input price: {price} --- SL price: {sl_price} --- market pending: {market_pendingorders}")
+        if price < sl_price:
+            for order in market_pendingorders:
+                cancel_order(order['OrderID'], pair)
+                df = df.drop(df[df['OrderID'] == order['OrderID']].index)
+                df.to_csv(csv_file, index = False)
+            time.sleep(0.5)
+            try:
+                stop_loss_order = place_order(pair_usd, 'SELL', quantity)
+                add_to_orders_and_pnl(stop_loss_order)
+                update_pfo(pair)
+            except:
+                logging.error(f"Unable to place SL order for {pair}: {stop_loss_order}")
         
-        # Check if limit sell order was triggered
-        filled_orders = query_order(None, pair, None)["OrderMatched"]
-        logging.info(f"Checking if limit sell order was triggered...")
+        # Revise SL Price
+        elif price > df[(df["Pair"] == pair) & (df["Side"] == "BUY")]['PriceBought'].iloc[0]:
+            curr_SLPrice = df[(df["Pair"] == pair) & (df["Side"] == "BUY")]['SLPrice'].iloc[0]
+            df.loc[(df["Pair"] == pair) & (df["Side"] == "BUY"), 'SLPrice'] = round(max(curr_SLPrice, price * 0.996), info['TradePairs'][pair_usd]['PricePrecision'])
+            df.to_csv(csv_file, index = False)
+
+        # If the current price is above SL, we check if the TP order was taken
+        if get_orders['Success'] == True:
+            filled_orders = list(filter(lambda x: x['Status'] == 'FILLED', get_orders['OrderMatched']))
+        else:
+            filled_orders = []
         for order in filled_orders:
             mask = (df["Pair"] == pair) & (df["Status"] == "PENDING")
             # TODO try except belows
+            logging.info(f"Order status {order['Status']} --- {df[mask]['OrderID']} == {order['OrderID']}")
             if order["Status"] == "FILLED" and df[mask]["OrderID"] == order["OrderID"]:
                 df = df.drop(df[df['OrderID'] == order['OrderID']].index) # Remove from pending orders csv
+                df.to_csv(csv_file, index = False)
                 add_to_orders_and_pnl(order)
                 logging.info(f"[LIMIT SELL] Limit sell order triggered. Added order to pnl csv: {order}.")
-    else:
-        if order_id:
-            take_profit_price = round(tp_factor * price, info['TradePairs'][pair]['PricePrecision'])
-            df.loc[len(df)] = [pair, order_id, price, stop_loss_price, take_profit_price, quantity]
-            df.to_csv(csv_file, index = False)
-            logging.info(f"Targets for {pair}: SL: {stop_loss_price}, TP: {take_profit_price}")
-            limit_sell_order = place_order(pair, "SELL", quantity, take_profit_price)
-            logging.info(f"[LIMIT SELL] Created: {limit_sell_order}")
+        
     return None
 
 def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
@@ -436,9 +445,10 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
 
     quantity_buy_market = round(quantity_buy, coin_info['AmountPrecision'])  # 30% for market order
 
+    
     balance = get_balance()
     try:
-        curr_position = balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free']
+        curr_position = max(balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free'], balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Lock'])
         curr_cash = balance['SpotWallet']["USD"]["Free"]
         current_position = round(curr_position, coin_info['AmountPrecision'])
     except:
@@ -447,6 +457,7 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     
     last_price = df["LastPrice"].iloc[-1]
     if last_price * current_position >= coin_info['MiniOrder']:
+        logging.info(f"{pair_or_coin}: last_price {last_price} curr_position {current_position} coin_info {coin_info['MiniOrder']}")
         trailing_stop_loss(pair_or_coin, current_position, last_price)
     
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
@@ -463,14 +474,13 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
             logging.info(f"[BUY] Sending Order for {pair_or_coin} with quantity {quantity_buy_market}")
             order = place_order(pair_or_coin, "BUY", quantity_buy_market)
             logging.info(f"[BUY] Order info: {order}")
-            order['OrderDetail']['FilledAverPrice']
-            order['OrderDetail']['FilledQuantity']
-            order['OrderDetail']['OrderID']
-            trailing_stop_loss(pair_or_coin, \
-                               order['OrderDetail']['FilledQuantity'], \
-                               order['OrderDetail']['FilledAverPrice'], \
-                               order['OrderDetail']['OrderID'])
             try:
+                limit_sell = place_order(pair_or_coin, \
+                                         'SELL', \
+                                         round(quantity_buy_market, coin_info['AmountPrecision']), \
+                                         round(1.014 * order['OrderDetail']['FilledAverPrice'], coin_info['PricePrecision']))
+                add_to_pending_orders(order, pair_or_coin)
+                add_to_pending_orders(limit_sell, pair_or_coin)
                 update_pfo(order["OrderDetail"]["Pair"])
                 add_to_orders_and_pnl(order)
             except:
@@ -499,16 +509,6 @@ def calculate_signal(df, num_indicators):
     else:
         signal += 0.5
     return round(signal / total_indicators, 2)
-
-def risk_management(pair_or_coin, curr_position, curr_price, take_profit_pct, stop_loss_pct, order_file = "./orders.csv"):
-    orders_df = pd.read_csv(order_file)
-    mask = (orders_df["Pair"] == pair_or_coin) & (orders_df["Side"] == "BUY")
-    price_bought = orders_df[mask]["FilledAverPrice"].iloc[-1]
-    logging.info(f"[RISK MANAGEMENT] {pair_or_coin} current price is {curr_price}, bought at {price_bought}")
-    if curr_price >= (1+take_profit_pct) * price_bought or curr_price <= (1+stop_loss_pct) * price_bought:
-        order = place_order(pair_or_coin, "SELL", curr_position)
-
-        return order
 
 def update_pfo(pair = None, csv_file = "./portfolio.csv"):
     balance = get_balance()
@@ -660,11 +660,15 @@ def create_orders(balance_wallet, csv_file = "./orders.csv"):
         if balance_wallet[pair]['Lock'] and df.iloc[-1]['Side'] == "SELL":
             add_to_pending_orders(df.iloc[-1], pair)
             add_to_pending_orders(df.iloc[-2], pair)
-        elif balance_wallet[pair]['Free'] and df.iloc[-1]['Side'] == "BUY":
-            add_to_pending_orders(df.iloc[-1], pair)
+        elif balance_wallet[pair]['Free'] and df.loc[df["Status"] == "FILLED"]['Side'].iloc[-1] == "BUY":
+            add_to_pending_orders(df.loc[df["Status"] == "FILLED"].iloc[-1], pair)
     logging.info(f"--- Orders.csv successfully created ---")
 
-def add_to_pending_orders(order, pair, remove = False):
+def add_to_pending_orders(input_order, pair, remove = False):
+    try:
+        order = input_order['OrderDetail']
+    except:
+        order = input_order
     po_csv_file = "./pending_orders.csv"
     po_csv = pd.read_csv(po_csv_file)    
     if remove:
@@ -679,12 +683,9 @@ def add_to_pending_orders(order, pair, remove = False):
         last_buy_type = order['Type']
         stop_loss_price = round(0.996 * last_buy_price, info['TradePairs'][pair + "/USD"]['PricePrecision'])
         take_profit_price = round(1.014 * last_buy_price, info['TradePairs'][pair + "/USD"]['PricePrecision'])
-        if po_csv.loc[po_csv['Pair'] == pair]:
-            pass
-            # replace latest order
-        else:
-            po_csv.loc[len(po_csv)] = [pair, last_buy_id, last_buy_price, stop_loss_price, take_profit_price, last_buy_quantity, last_buy_status, last_buy_side, last_buy_type]
-            po_csv.to_csv(po_csv_file, index = False)
+
+        po_csv.loc[len(po_csv)] = [pair, last_buy_id, last_buy_price, stop_loss_price, take_profit_price, last_buy_quantity, last_buy_status, last_buy_side, last_buy_type]
+        po_csv.to_csv(po_csv_file, index = False)
         logging.info(f"Added targets for {pair} bought --- SL: {stop_loss_price}, TP: {take_profit_price} on startup")
 
 def create_pnl():
@@ -733,7 +734,20 @@ if __name__ == "__main__":
     logging.info("--- Checking Server Time ---")
     logging.info(check_server_time())
 
-    # if info:
+    while True:
+        asyncio.run(main())
+
+    # print("\n--- Checking Pending Orders ---")
+    # print(get_pending_count())
+
+    # # Uncomment these to test trading actions:
+    # # print(place_order("BTC", "BUY", 0.01, price=95000))  # LIMIT
+    # print(place_order("BNB/USD", "BUY", 1))      
+    # print(place_order("BNB/USD", "SELL", 1))             # MARKET       
+    # print(query_order(pair="BNB/USD", pending_only=False))
+    # print(cancel_order(pair="BNB/USD"))
+
+        # if info:
     #     print(f"Available Pairs: {list(info.get('TradePairs', {}).keys())}")
     
     # logging.info("--- Running query_order ---")
@@ -748,16 +762,3 @@ if __name__ == "__main__":
     #print(place_order("ADA/USD", "SELL", "3.5", "0.34", "LIMIT"))
     #print("\n--- Triggering query_order ---")
     #print([order["Status"] for order in query_order(None, "ADA/USD")["OrderMatched"]])
-    while True:
-        asyncio.run(main())
-
-    # print("\n--- Checking Pending Orders ---")
-    # print(get_pending_count())
-
-    # # Uncomment these to test trading actions:
-    # # print(place_order("BTC", "BUY", 0.01, price=95000))  # LIMIT
-    # print(place_order("BNB/USD", "BUY", 1))      
-    # print(place_order("BNB/USD", "SELL", 1))             # MARKET       
-    # print(query_order(pair="BNB/USD", pending_only=False))
-    # print(cancel_order(pair="BNB/USD"))
-
