@@ -722,7 +722,7 @@ async def poll_for_trades(ticker_list):
         check_for_trades(df, ticker, curr_cash, buy_expenditure)
 
 async def minute_data():
-    time.sleep(10)
+    time.sleep(55)
 
 async def main():
     """
