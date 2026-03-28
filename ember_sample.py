@@ -370,16 +370,19 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     rows = 59
     if len(df) < rows: # check function on compute_metrics for number, rows
         return 
+    balance = get_balance()
+    # Only trade coins that fulfill these conditions. 
+    if df["UnitTradeValue"].iloc[-1] < 10000000:
+        clear_coin(pair_or_coin, balance)
+        return 
     if df['LastPrice'].iloc[-1] < 1e-4:
-        return
-    if df["UnitTradeValue"].iloc[-1] < 20000000:
-        return  
+        clear_coin(pair_or_coin, balance)
+        return 
     spread = df["MaxBid"] - df["MinAsk"]
     mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
     quantity_buy = buy_expenditure / mid_spread.iloc[-1]
     coin_info = info['TradePairs'][pair_or_coin]
     quantity_buy_market = round(quantity_buy, coin_info['AmountPrecision'])  # 30% for market order    
-    balance = get_balance()
     try:
         curr_position = max(balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free'], balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Lock'])
         curr_cash = balance['SpotWallet']["USD"]["Free"]
@@ -615,23 +618,23 @@ def create_pnl():
     logging.info(f"Total PnL on starting: {pnl}")
     summed_df.to_csv("./pnl.csv")
 
-def clean_portfolio():
-    balance = get_balance()
-    for coin in balance['SpotWallet']:
-        if coin == 'USD':
-            continue
-        if balance['SpotWallet'][coin]['Free'] > 0:
-            flat_pos = place_order(coin + '/USD', 'SELL', balance['SpotWallet'][coin]['Free'])
-            logging.info(f"[MARKET SELL {coin}] {flat_pos}")
-        elif balance['SpotWallet'][coin]['Lock'] > 0:
-            pending = list(filter(lambda x: x['Status'] == 'PENDING', query_order(None, coin + '/USD')['OrderMatched']))
-            cancel_pending = cancel_order(pending[0]['OrderID'])
-            logging.info(f"[CANCEL {coin}] {cancel_pending}")
-            time.sleep(0.1)
-            flat_pos = place_order(coin + '/USD', 'SELL', balance['SpotWallet'][coin]['Lock'])
-            logging.info(f"[MARKET SELL {coin}] {flat_pos}")
-    balance = get_balance()
-    logging.info(f"Balance: {balance['SpotWallet']}")
+def clear_coin(input_pair, balance):
+    pair = input_pair.replace('/USD','')
+    pair_usd = pair + '/USD'
+    if pair == 'USD':
+        return
+    if balance['SpotWallet'][pair]['Free'] > 0:
+        flat_pos = place_order(pair_usd, 'SELL', balance['SpotWallet'][pair]['Free'])
+        logging.info(f"[MARKET SELL {pair}] {flat_pos}")
+    elif balance['SpotWallet'][pair]['Lock'] > 0:
+        pending = list(filter(lambda x: x['Status'] == 'PENDING', query_order(None, pair_usd)['OrderMatched']))
+        cancel_pending = cancel_order(pending[0]['OrderID'])
+        logging.info(f"[CANCEL {pair}] {cancel_pending}")
+        time.sleep(0.1)
+        flat_pos = place_order(pair_usd, 'SELL', balance['SpotWallet'][pair]['Lock'])
+        logging.info(f"[MARKET SELL {pair}] {flat_pos}")
+
+
 
 # ------------------------------
 # Async Functions
