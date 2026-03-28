@@ -339,7 +339,7 @@ async def compute_metrics(ticker_list, short=10, long=30):
             continue
         df = pd.read_csv(path)
         rows = max(period_DS, 2*period_DL - 1, period_MA, period_ATR, period_RSI, period_EMAS, period_EMAL, period_ATR_stdev)
-        if len(df) >= rows:
+        if len(df) >= 3:
             df["DEMA_Short"] = calculate_double_EMA(df, period_DS, "LastPrice")
             df["DEMA_Long"] = calculate_double_EMA(df, period_DL, "LastPrice")
             df["MA"] = calculate_MA(df, period_MA, "LastPrice")
@@ -350,7 +350,7 @@ async def compute_metrics(ticker_list, short=10, long=30):
             df["ATRstdev"] = calculate_ATR_stdev(df, "LastPrice", period_ATR_stdev)
             df["DynamicStopLoss"] = StopLoss_factor * df["ATRstdev"]
             df["DynamicTakeProfit"] = TakeProfit_factor * df["ATRstdev"]
-        while len(df) > rows:
+        while len(df) > 3:
             df = df.iloc[1:]
         df.to_csv(path, index=False) # Update the csv
 
@@ -407,7 +407,9 @@ def trailing_stop_loss(pair_usd, quantity, price, order_id = None, csv_file = '.
                 logging.error(f"Unable to place SL order for {pair}: {stop_loss_order}")
         
         # Revise SL Price
+            
         elif price > df[(df["Pair"] == pair) & (df["Side"] == "BUY")]['PriceBought'].iloc[0]:
+            logging.info(f"Revising stop loss price for {pair_usd}")
             curr_SLPrice = df[(df["Pair"] == pair) & (df["Side"] == "BUY")]['SLPrice'].iloc[0]
             df.loc[(df["Pair"] == pair) & (df["Side"] == "BUY"), 'SLPrice'] = round(max(curr_SLPrice, price * 0.996), info['TradePairs'][pair_usd]['PricePrecision'])
             df.to_csv(csv_file, index = False)
@@ -419,34 +421,34 @@ def trailing_stop_loss(pair_usd, quantity, price, order_id = None, csv_file = '.
             filled_orders = []
         for order in filled_orders:
             mask = (df["Pair"] == pair) & (df["Status"] == "PENDING")
-            # TODO try except belows
-            logging.info(f"Order status {order['Status']} --- {df[mask]['OrderID']} == {order['OrderID']}")
-            if order["Status"] == "FILLED" and df[mask]["OrderID"] == order["OrderID"]:
-                df = df.drop(df[df['OrderID'] == order['OrderID']].index) # Remove from pending orders csv
-                df.to_csv(csv_file, index = False)
-                add_to_orders_and_pnl(order)
-                logging.info(f"[LIMIT SELL] Limit sell order triggered. Added order to pnl csv: {order}.")
-        
+            if not df[mask].empty:
+                logging.info(f"Order status {order['Status']} --- {df[mask]['OrderID'].iloc[-1]} == {order['OrderID']}")
+                if order["Status"] == "FILLED" and df[mask]["OrderID"].iloc[-1] == order["OrderID"]:
+                    df = df.drop(df[df['OrderID'] == order['OrderID']].index) # Remove from pending orders csv
+                    df.to_csv(csv_file, index = False)
+                    add_to_orders_and_pnl(order)
+                    logging.info(f"[LIMIT SELL] Limit sell order triggered. Added order to pnl csv: {order}.")
+            
     return None
 
 def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     # TODO Iterate through CSV. (Added: CSV should be maintained at (2*long_time_period-1) rows)
     # Check if we take a trade - To check past information in CSV to see if the last price is above / lower EMA bounds
-    if len(df) < 59: # check function on compute_metrics for number, rows
-        return
+    if len(df) < 3: # check function on compute_metrics for number, rows
+        return # CHANGE
 
-    if df["UnitTradeValue"].iloc[-1] < 10000000:
-        return 
+    # if df["UnitTradeValue"].iloc[-1] < 10000000:
+    #     return  # CHANGE
     spread = df["MaxBid"] - df["MinAsk"]
     mid_spread = (df["MaxBid"] + df["MinAsk"]) / 2
     quantity_buy = buy_expenditure / mid_spread.iloc[-1]
-
+    
     coin_info = info['TradePairs'][pair_or_coin]
 
     quantity_buy_market = round(quantity_buy, coin_info['AmountPrecision'])  # 30% for market order
-
     
     balance = get_balance()
+    
     try:
         curr_position = max(balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Free'], balance['SpotWallet'][pair_or_coin.replace('/USD','')]['Lock'])
         curr_cash = balance['SpotWallet']["USD"]["Free"]
@@ -454,15 +456,16 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
     except:
         logging.error(f"Failed to get balance: {balance}")
         return None
-    
+
     last_price = df["LastPrice"].iloc[-1]
+
     if last_price * current_position >= coin_info['MiniOrder']:
         logging.info(f"{pair_or_coin}: last_price {last_price} curr_position {current_position} coin_info {coin_info['MiniOrder']}")
         trailing_stop_loss(pair_or_coin, current_position, last_price)
-    
+
     # Example: if mid_spread = 10000, and buy_expenditure is $100, then we buy 100/10000 units
     # Current_position condition updated to current_position < 0.1 due to floating point error in the get_balance
-    if last_price*current_position < coin_info['MiniOrder'] and calculate_signal(df, 3) > 0.7 \
+    if last_price * current_position < coin_info['MiniOrder'] and calculate_signal(df, 3) > 0.5 \
         and curr_cash > buy_expenditure:
         logging.info(f"[BUY] Signal = {calculate_signal(df, 3)} --- Current_position {current_position} {pair_or_coin}, DEMA_Short: {df['DEMA_Short'].iloc[-1]}, DEMA_Long: {df['DEMA_Long'].iloc[-1]}, curr_cash: {curr_cash}, buy_exp: {buy_expenditure}")
 
@@ -473,14 +476,19 @@ def check_for_trades(df, pair_or_coin, curr_cash, buy_expenditure):
             # if last_price*quantity_buy_market >= coin_info['MiniOrder']:
             logging.info(f"[BUY] Sending Order for {pair_or_coin} with quantity {quantity_buy_market}")
             order = place_order(pair_or_coin, "BUY", quantity_buy_market)
+
+            pair = pair_or_coin.replace('/USD','') # Since add_to_pending_orders input pair has no /USD
+            add_to_pending_orders(order, pair)
             logging.info(f"[BUY] Order info: {order}")
             try:
+                time.sleep(0.5)
                 limit_sell = place_order(pair_or_coin, \
                                          'SELL', \
                                          round(quantity_buy_market, coin_info['AmountPrecision']), \
                                          round(1.014 * order['OrderDetail']['FilledAverPrice'], coin_info['PricePrecision']))
-                add_to_pending_orders(order, pair_or_coin)
-                add_to_pending_orders(limit_sell, pair_or_coin)
+                time.sleep(0.5)
+                logging.info(f"[LIMIT SELL] Attempted to place limit sell: {limit_sell}")
+                add_to_pending_orders(limit_sell, pair)
                 update_pfo(order["OrderDetail"]["Pair"])
                 add_to_orders_and_pnl(order)
             except:
@@ -559,12 +567,35 @@ async def poll_for_trades(ticker_list):
         df = pd.read_csv(path)
         curr_cash = balance["SpotWallet"]["USD"]["Free"]
         threshold = 0.05
-        buy_expenditure = min(curr_cash * threshold, 25000)
+        buy_expenditure = min(curr_cash * threshold, 2500)
         check_for_trades(df, ticker, curr_cash, buy_expenditure)
 
-async def minute_data():
-    time.sleep(60)
 
+async def minute_data():
+    time.sleep(5) # CHANGE
+
+# async def main():
+#     """
+#     For each ticker, do (while True:)
+#     1. Open CSV of the ticker + Calculate DEMA 
+#     2. Populate CSV with data (see function tickers_to_csv or see the csv that has been populated)
+#     3. Compute the DEMA for that CSV while it is still open
+#         a. Also, ensure there are exactly 2*long_period - 1 rows in the CSV 
+#         b. In particular, add the latest data, followed by removing the earliest row, then compute the DEMA columns
+#      """
+#     try:
+#         print(f"Started at {time.strftime('%X')}")
+#         info = get_exchange_info()
+#         ticker_list = list(info.get('TradePairs', {}).keys())
+#         await asyncio.gather(
+#             tickers_to_csv(ticker_list),     # Always keep getting exchange data
+#             compute_metrics(ticker_list),    # Always recompute DEMA        
+#             poll_for_trades(ticker_list),     # Check for trades
+#             minute_data()
+#         )
+#         print(f"Finished at {time.strftime('%X')}")
+#     except Exception as e:
+#         logging.error(f"Error: {info}")
 async def main():
     """
     For each ticker, do (while True:)
@@ -574,19 +605,16 @@ async def main():
         a. Also, ensure there are exactly 2*long_period - 1 rows in the CSV 
         b. In particular, add the latest data, followed by removing the earliest row, then compute the DEMA columns
      """
-    try:
-        print(f"Started at {time.strftime('%X')}")
-        info = get_exchange_info()
-        ticker_list = list(info.get('TradePairs', {}).keys())
-        await asyncio.gather(
-            tickers_to_csv(ticker_list),     # Always keep getting exchange data
-            compute_metrics(ticker_list),    # Always recompute DEMA        
-            poll_for_trades(ticker_list),     # Check for trades
-            minute_data()
-        )
-        print(f"Finished at {time.strftime('%X')}")
-    except Exception as e:
-        logging.error(f"Error: {info}")
+    print(f"Started at {time.strftime('%X')}")
+    info = get_exchange_info()
+    ticker_list = list(info.get('TradePairs', {}).keys())
+    await asyncio.gather(
+        tickers_to_csv(ticker_list),     # Always keep getting exchange data
+        compute_metrics(ticker_list),    # Always recompute DEMA        
+        poll_for_trades(ticker_list),     # Check for trades
+        #minute_data()
+    )
+    print(f"Finished at {time.strftime('%X')}")
 
 def create_csvs(tickers):
     folder_path = "./ticker_csv/"
@@ -613,7 +641,9 @@ def add_to_orders_and_pnl(order, order_file = "./orders.csv", pnl_file = "./pnl.
     try:
         order_info = order["OrderDetail"]
     except:
-        order_info = order["OrderMatched"][0]
+        order_info = order
+        logging.error(f"[add_to_orders_and_pnl]: Order {order_info} did not go through.")
+        return None
     if order_info["Status"] != "FILLED":
         logging.info(f"Order not added to orders and pnl csv due to status {order_info['Status']}")
         return
@@ -665,17 +695,20 @@ def create_orders(balance_wallet, csv_file = "./orders.csv"):
     logging.info(f"--- Orders.csv successfully created ---")
 
 def add_to_pending_orders(input_order, pair, remove = False):
+    # pair in the input is BTC (without /USD)
     try:
         order = input_order['OrderDetail']
     except:
         order = input_order
+        logging.error(f"[add_to_pending_orders]: {order}")
+        return None
     po_csv_file = "./pending_orders.csv"
-    po_csv = pd.read_csv(po_csv_file)    
+    po_csv = pd.read_csv(po_csv_file)  
     if remove:
         po_csv = po_csv[~(po_csv["Pair"] == pair)]
         po_csv.to_csv(po_csv_file, index = False)
     else:
-        last_buy_id = order['OrderID']
+        last_buy_id = order['OrderID'] 
         last_buy_price = order['FilledAverPrice']
         last_buy_quantity = order['FilledQuantity']
         last_buy_status = order['Status']
@@ -683,9 +716,8 @@ def add_to_pending_orders(input_order, pair, remove = False):
         last_buy_type = order['Type']
         stop_loss_price = round(0.996 * last_buy_price, info['TradePairs'][pair + "/USD"]['PricePrecision'])
         take_profit_price = round(1.014 * last_buy_price, info['TradePairs'][pair + "/USD"]['PricePrecision'])
-
         po_csv.loc[len(po_csv)] = [pair, last_buy_id, last_buy_price, stop_loss_price, take_profit_price, last_buy_quantity, last_buy_status, last_buy_side, last_buy_type]
-        po_csv.to_csv(po_csv_file, index = False)
+        po_csv.to_csv(po_csv_file, index = False) 
         logging.info(f"Added targets for {pair} bought --- SL: {stop_loss_price}, TP: {take_profit_price} on startup")
 
 def create_pnl():
@@ -704,7 +736,7 @@ if __name__ == "__main__":
     all_orders = query_order()
 
     logging.info("--- Remove all temporary data ---")
-    # remove_csv_files("./ticker_csv/")
+    remove_csv_files("./ticker_csv/")
     remove_csv_files("./")
     
     logging.info("--- Checking Current Balance ---")
@@ -717,7 +749,7 @@ if __name__ == "__main__":
 
     logging.info("--- Creating Ticker CSVs ---")
     ticker_list = list(info.get('TradePairs', {}).keys())
-    create_csvs(ticker_list)   
+    create_csvs(ticker_list)
 
     logging.info("--- Creating Utility CSVs ---")
     create_headers()
