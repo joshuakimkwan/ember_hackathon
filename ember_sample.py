@@ -330,6 +330,9 @@ def trailing_stop_loss(pair_usd, quantity, price, csv_file = './pending_orders.c
             time.sleep(0.1)
             try:
                 stop_loss_order = place_order(pair_usd, 'SELL', quantity)
+                time.sleep(0.1)
+                mask = (df['Pair'] == pair) & (df['Side'] == "BUY")
+                df = df.drop(df[mask].index)
                 add_to_orders_and_pnl(stop_loss_order)
                 update_pfo(pair)
             except:
